@@ -217,8 +217,7 @@ Run neural bot vs random bot with the default deck file
 ```bash
 python dm_engine/scripts/play_neural_game.py \
   --mode neural-vs-random \
-  --max-steps 1000 \
-  --seed 1
+  --max-steps 1000
 ```
 
 Run neural bot vs neural bot:
@@ -226,8 +225,7 @@ Run neural bot vs neural bot:
 ```bash
 python dm_engine/scripts/play_neural_game.py \
   --mode neural-vs-neural \
-  --max-steps 1000 \
-  --seed 1
+  --max-steps 1000
 ```
 
 Save a player-friendly step log to a text file:
@@ -252,6 +250,7 @@ Useful flags:
 - `--epsilon 0.05`: random exploration rate. Use `0.0` for fully greedy action selection.
 - `--model-path path/to/model.pt`: load saved neural-network weights.
 - `--first-player 0`: choose which player starts.
+- `--seed 1`: make shuffle and bot choices reproducible. Omit it for a new random game each run.
 - `--max-steps 1000`: stop long games after this many legal actions.
 - `--show-steps`: print readable action-by-action output for non-technical review.
 - `--report-path path.txt`: save the same readable action log to a text file.

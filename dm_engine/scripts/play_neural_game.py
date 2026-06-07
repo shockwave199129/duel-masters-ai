@@ -48,7 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["neural-vs-random", "neural-vs-neural"], default="neural-vs-random")
     parser.add_argument("--epsilon", type=float, default=0.05)
     parser.add_argument("--max-steps", type=int, default=1000)
-    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=None, help="Optional seed for reproducible shuffle/bot choices")
     parser.add_argument("--first-player", type=int, choices=[0, 1], default=0)
     parser.add_argument("--show-steps", action="store_true", help="Print a readable turn-by-turn action log")
     parser.add_argument("--report-path", type=Path, default=None, help="Optional text file to save the action log")
@@ -185,11 +185,13 @@ def main() -> None:
         game_id="gen0-neural-game",
     )
 
-    bot0 = NeuralBot(model_path=args.model_path, epsilon=args.epsilon, seed=args.seed)
+    bot0_seed = args.seed
+    bot1_seed = args.seed + 1 if args.seed is not None else None
+    bot0 = NeuralBot(model_path=args.model_path, epsilon=args.epsilon, seed=bot0_seed)
     bot1 = (
-        NeuralBot(model_path=args.model_path, epsilon=args.epsilon, seed=args.seed + 1)
+        NeuralBot(model_path=args.model_path, epsilon=args.epsilon, seed=bot1_seed)
         if args.mode == "neural-vs-neural"
-        else RandomBot(seed=args.seed + 1)
+        else RandomBot(seed=bot1_seed)
     )
 
     report_lines: list[str] = []
