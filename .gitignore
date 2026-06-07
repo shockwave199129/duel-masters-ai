@@ -1,0 +1,30 @@
+.env
+.env.*
+__pycache__/
+*.py[cod]
+
+# Local secrets/config
+**/.env
+**/.env.*
+
+# Generated training outputs
+data/self_play/
+data/reports/
+dm_engine/models/
+
+# Generated crawler outputs
+*.log
+crawler/state/
+state/
+dm_cards.json
+dm_cards.csv
+dm_checkpoint.json
+dm_errors.log
+
+# Local databases/vector stores
+*.sqlite
+*.sqlite3
+*.db
+chroma/
+chroma_db/
+dm_chroma_db/

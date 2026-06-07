@@ -1,0 +1,12 @@
+---
+alwaysApply: true
+---
+
+# Duel Masters Rules Source Of Truth
+
+For all work in this project, treat `Duel_Masters_rules.md` as the authoritative rules reference.
+
+- Read and follow `Duel_Masters_rules.md` before making gameplay, rules engine, card effect parsing, validation, test, or data-model changes.
+- Ensure all coding decisions that affect Duel Masters behavior are aligned with `Duel_Masters_rules.md`.
+- If implementation details conflict with `Duel_Masters_rules.md`, prefer the document and call out the mismatch before changing behavior.
+- Do not invent Duel Masters rule behavior from memory when the rule document can answer it.

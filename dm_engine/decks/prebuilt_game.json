@@ -1,0 +1,44 @@
+{
+  "players": [
+    {
+      "name": "Deck 1",
+      "owner": "Player 0",
+      "main": {
+        "Holy_Awe": 4,
+        "T_Anago": 4,
+        "Mariflo-1,_Viral": 4,
+        "Astral_Reef": 4,
+        "Galingmar,_Hybrid_Starve_Mobile": 4,
+        "Bau_Mad_Romaion,_Concatenated_True_Wicked": 4,
+        "The_Triple_Three": 4,
+        "Zardiclica,_Hybrid_Winds_Dragon": 4,
+        "Emotional_Hardcore,_Sacred_Dragon": 4,
+        "Dragon%27s_Sign": 4
+      }
+    },
+    {
+      "name": "Deck 2",
+      "owner": "Player 1",
+      "main": {
+        "Top_of_Romanesque": 4,
+        "Mitsurugi_Boost,_Matchless_Dragon_Demon": 2,
+        "Teranesque,_Hard_Battling_Ancient_Dragon": 4,
+        "Onimaru_%22Head%22,_Victory_Rush": 1,
+        "Meteorite_Ryusei_the_Flash": 1,
+        "Bolmeteus_Sapphire_Dragon": 2,
+        "VAN_Beethoven,_Zenith_of_%22Shura%22": 2,
+        "Shura_Beethoven,_Zenith_of_%22Hadou%22": 2,
+        "Codeking_Mozart": 3,
+        "Mendelssohn": 4,
+        "Digorpion,_Ground_Digging_Snakekind": 3,
+        "Ryusei_Kaiser,_the_Eternal": 2,
+        "Bolbalzak_Ex": 1,
+        "Mystery_Cube": 4,
+        "Wald_Brachio,_Absolute_World_King": 1,
+        "Aegis_Boost,_Matchless_Dragon_Saint": 2,
+        "Seventh_Tower": 1,
+        "Memento_Guardian_Shrine,_Prison_Court_of_D": 1
+      }
+    }
+  ]
+}
