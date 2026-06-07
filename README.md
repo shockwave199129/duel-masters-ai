@@ -176,6 +176,17 @@ Run one crawler smoke test:
 python crawler/test_set_page_crawler.py
 ```
 
+## GitHub Actions
+
+The repository includes a lightweight CI workflow at `.github/workflows/ci.yml`.
+On pushes and pull requests to `main`, it:
+
+- compiles Python sources in `dm_engine`, `rules_ingest`, and `crawler/scripts`
+- runs all standalone `dm_engine/tests/test_*.py` scripts
+
+The workflow intentionally avoids DB/API/LLM-dependent crawler jobs because
+those require local services and secrets.
+
 ## Current Status
 
 This is an experimental Duel Masters AI stack. The engine can run legal-action

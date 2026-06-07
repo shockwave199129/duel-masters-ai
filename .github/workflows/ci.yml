@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  engine-tests:
+    name: Engine compile and tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile Python sources
+        run: |
+          python -m compileall dm_engine rules_ingest crawler/scripts
+
+      - name: Run engine standalone tests
+        run: |
+          for test_file in dm_engine/tests/test_*.py; do
+            echo "Running ${test_file}"
+            python "${test_file}"
+          done
