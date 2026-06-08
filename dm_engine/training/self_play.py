@@ -61,6 +61,8 @@ def _record_decision(
     legal_actions: list[Action],
     chosen_index: int,
     deck_slots: tuple[int, int],
+    deck_ids: tuple[int | None, int | None],
+    deck_names: tuple[str, str],
     first_player: int,
     db,
 ) -> dict[str, Any]:
@@ -86,6 +88,10 @@ def _record_decision(
         "player": player,
         "original_deck_index": deck_slots[player],
         "deck_slots": list(deck_slots),
+        "deck_ids": list(deck_ids),
+        "deck_names": list(deck_names),
+        "player_deck_id": deck_ids[player],
+        "player_deck_name": deck_names[player],
         "first_player": first_player,
         "turn": state.turn_number,
         "phase": state.current_phase.name,
@@ -135,32 +141,42 @@ def _append_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             f.write(json.dumps(row, separators=(",", ":")) + "\n")
 
 
+def _balanced_bit(index: int, offset: int) -> int:
+    """Alternate 0/1 with a random offset so even runs stay balanced."""
+    return (index + offset) % 2
+
+
 def run_recorded_game(
     *,
     db,
-    deck_json: str | Path,
+    deck_json: str | Path | None,
     output_path: str | Path,
     seed: int,
     game_id: str,
     game_index: int = 0,
+    seat_flip: bool = False,
     max_steps: int = 1000,
     epsilon: float = 0.05,
     first_player: int | None = 0,
-    randomize_seating: bool = True,
     model_path: str | Path | None = None,
     terminal_weight: float = 0.65,
+    use_database_decks: bool = False,
+    deck_source: str | None = None,
+    allow_mirror_matches: bool = False,
 ) -> tuple[GameState, list[dict[str, Any]]]:
     """Run one neural-vs-neural game and append finalized decision rows."""
     rng = random.Random(seed)
-    state, deck_slots, actual_first_player = _load_self_play_state(
+    state, deck_slots, deck_ids, deck_names, actual_first_player = _load_self_play_state(
         deck_json=deck_json,
         db=db,
         first_player=first_player,
         seed=seed,
-        game_index=game_index,
         game_id=game_id,
-        randomize_seating=randomize_seating,
+        seat_flip=seat_flip,
         rng=rng,
+        use_database_decks=use_database_decks,
+        deck_source=deck_source,
+        allow_mirror_matches=allow_mirror_matches,
     )
     bots = {
         0: NeuralBot(model_path=model_path, epsilon=epsilon, seed=seed),
@@ -188,6 +204,8 @@ def run_recorded_game(
                 legal_actions=legal_actions,
                 chosen_index=chosen_index,
                 deck_slots=deck_slots,
+                deck_ids=deck_ids,
+                deck_names=deck_names,
                 first_player=actual_first_player,
                 db=db,
             )
@@ -209,7 +227,7 @@ def run_recorded_game(
 def run_self_play_games(
     *,
     db,
-    deck_json: str | Path,
+    deck_json: str | Path | None,
     output_path: str | Path,
     games: int = 15,
     seed_start: int = 1,
@@ -220,6 +238,9 @@ def run_self_play_games(
     model_path: str | Path | None = None,
     terminal_weight: float = 0.65,
     overwrite: bool = False,
+    use_database_decks: bool = False,
+    deck_source: str | None = None,
+    allow_mirror_matches: bool = False,
 ) -> SelfPlaySummary:
     """Run and record several neural-vs-neural games."""
     output = Path(output_path)
@@ -231,23 +252,33 @@ def run_self_play_games(
     no_winner_terminal = 0
     unfinished = 0
     decisions = 0
+    schedule_rng = random.Random(seed_start)
+    seat_offset = schedule_rng.randrange(2)
+    first_player_offset = schedule_rng.randrange(2)
 
     for index in range(games):
         seed = seed_start + index
         game_id = f"gen0-v2-{index + 1:06d}"
+        seat_flip = randomize_seating and _balanced_bit(index, seat_offset) == 1
+        scheduled_first_player = first_player
+        if randomize_seating:
+            scheduled_first_player = _balanced_bit(index, first_player_offset)
         state, records = run_recorded_game(
             db=db,
             deck_json=deck_json,
             output_path=output,
             seed=seed,
             game_index=index,
+            seat_flip=seat_flip,
             game_id=game_id,
             max_steps=max_steps,
             epsilon=epsilon,
-            first_player=first_player,
-            randomize_seating=randomize_seating,
+            first_player=scheduled_first_player,
             model_path=model_path,
             terminal_weight=terminal_weight,
+            use_database_decks=use_database_decks,
+            deck_source=deck_source,
+            allow_mirror_matches=allow_mirror_matches,
         )
         decisions += len(records)
         winner = _winner_from_result(state.result)
@@ -279,30 +310,41 @@ def run_self_play_games(
 
 def _load_self_play_state(
     *,
-    deck_json: str | Path,
+    deck_json: str | Path | None,
     db,
     first_player: int | None,
     seed: int,
-    game_index: int,
     game_id: str,
-    randomize_seating: bool,
+    seat_flip: bool,
     rng: random.Random,
-) -> tuple[GameState, tuple[int, int], int]:
-    data = json.loads(Path(deck_json).read_text(encoding="utf-8"))
-    players = data.get("players")
-    if not isinstance(players, list) or len(players) != 2:
-        raise ValueError("Prebuilt game JSON must contain exactly two players")
+    use_database_decks: bool,
+    deck_source: str | None,
+    allow_mirror_matches: bool,
+) -> tuple[GameState, tuple[int, int], tuple[int | None, int | None], tuple[str, str], int]:
+    if use_database_decks:
+        sampled = db.sample_training_decks(
+            rng,
+            count=2,
+            source=deck_source,
+            allow_mirror=allow_mirror_matches,
+        )
+        deck_slots = (1, 0) if seat_flip else (0, 1)
+        assigned = (sampled[deck_slots[0]], sampled[deck_slots[1]])
+        p0 = assigned[0][1]
+        p1 = assigned[1][1]
+        deck_ids = (assigned[0][0], assigned[1][0])
+        deck_names = (p0.main_deck.name, p1.main_deck.name)
+    else:
+        if deck_json is None:
+            raise ValueError("deck_json is required unless use_database_decks=True")
+        p0, p1, deck_slots, deck_names = _load_json_deck_pair(
+            deck_json,
+            db,
+            seat_flip=seat_flip,
+        )
+        deck_ids = (None, None)
 
-    deck_slots = (0, 1)
-    if randomize_seating and (game_index + rng.randrange(2)) % 2 == 1:
-        deck_slots = (1, 0)
-
-    actual_first_player = first_player
-    if randomize_seating:
-        actual_first_player = (game_index + rng.randrange(2)) % 2
-
-    p0 = prebuilt_deck_from_dict(players[deck_slots[0]], db)
-    p1 = prebuilt_deck_from_dict(players[deck_slots[1]], db)
+    actual_first_player = first_player if first_player is not None else rng.randrange(2)
     state = initialize_game(
         p0.main_deck,
         p1.main_deck,
@@ -312,4 +354,21 @@ def _load_self_play_state(
     )
     _apply_extra_zones(state, 0, p0)
     _apply_extra_zones(state, 1, p1)
-    return state, deck_slots, actual_first_player if actual_first_player is not None else state.active_player
+    return state, deck_slots, deck_ids, deck_names, actual_first_player
+
+
+def _load_json_deck_pair(
+    deck_json: str | Path,
+    db,
+    *,
+    seat_flip: bool,
+):
+    data = json.loads(Path(deck_json).read_text(encoding="utf-8"))
+    players = data.get("players")
+    if not isinstance(players, list) or len(players) != 2:
+        raise ValueError("Prebuilt game JSON must contain exactly two players")
+
+    deck_slots = (1, 0) if seat_flip else (0, 1)
+    p0 = prebuilt_deck_from_dict(players[deck_slots[0]], db)
+    p1 = prebuilt_deck_from_dict(players[deck_slots[1]], db)
+    return p0, p1, deck_slots, (p0.main_deck.name, p1.main_deck.name)

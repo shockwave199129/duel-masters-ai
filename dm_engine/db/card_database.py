@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Optional
+from typing import Any, Optional
 
 import psycopg2
 import psycopg2.extras
@@ -374,3 +374,202 @@ class CardDatabase:
             card_counts=card_counts,
         )
         return self.resolve_deck(deck)
+
+    # ── Training deck persistence ──────────────────────────────────────────────
+
+    def upsert_training_deck(
+        self,
+        spec,
+        *,
+        source: str = "manual",
+        is_active: bool = True,
+    ) -> int:
+        """Insert or update a training deck and return its database ID."""
+        main_deck = spec.main_deck
+        if not main_deck.is_valid():
+            raise ValueError(f"Training deck '{main_deck.name}' is not a legal 40-card deck")
+
+        deck_id: int
+        conn = psycopg2.connect(self._dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO training_decks (
+                        name, owner, source, is_active,
+                        hyperspatial, ultra_gr, start_battle_zone, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NOW())
+                    ON CONFLICT (name) DO UPDATE SET
+                        owner = EXCLUDED.owner,
+                        source = EXCLUDED.source,
+                        is_active = EXCLUDED.is_active,
+                        hyperspatial = EXCLUDED.hyperspatial,
+                        ultra_gr = EXCLUDED.ultra_gr,
+                        start_battle_zone = EXCLUDED.start_battle_zone,
+                        updated_at = NOW()
+                    RETURNING id
+                    """,
+                    (
+                        main_deck.name,
+                        main_deck.owner,
+                        source,
+                        is_active,
+                        json.dumps(_zone_counts(spec.hyperspatial)),
+                        json.dumps(_zone_counts(spec.ultra_gr)),
+                        json.dumps([card.id for card in spec.start_battle_zone]),
+                    ),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise RuntimeError("Training deck upsert did not return an ID")
+                deck_id = int(row[0])
+                cur.execute("DELETE FROM training_deck_cards WHERE deck_id = %s", (deck_id,))
+                cur.executemany(
+                    """
+                    INSERT INTO training_deck_cards (deck_id, card_id, count)
+                    VALUES (%s, %s, %s)
+                    """,
+                    [
+                        (deck_id, int(card_id), int(count))
+                        for card_id, count in sorted(main_deck.card_counts.items())
+                    ],
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return deck_id
+
+    def list_training_deck_ids(self, *, source: str | None = None, active_only: bool = True) -> list[int]:
+        """Return IDs for persisted training decks."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if active_only:
+            clauses.append("is_active = TRUE")
+        if source is not None:
+            clauses.append("source = %s")
+            params.append(source)
+
+        query = "SELECT id FROM training_decks"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY id"
+
+        conn = psycopg2.connect(self._dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return [int(row[0]) for row in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def load_training_deck(self, deck_id: int):
+        """Load one persisted training deck as a resolved PrebuiltDeckSpec."""
+        from decks.prebuilt import PrebuiltDeckSpec
+
+        conn = psycopg2.connect(self._dsn)
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, name, owner, hyperspatial, ultra_gr, start_battle_zone
+                    FROM training_decks
+                    WHERE id = %s
+                    """,
+                    (deck_id,),
+                )
+                deck_row = cur.fetchone()
+                if deck_row is None:
+                    raise KeyError(f"Training deck ID {deck_id} not found")
+
+                cur.execute(
+                    """
+                    SELECT card_id, count
+                    FROM training_deck_cards
+                    WHERE deck_id = %s
+                    ORDER BY card_id
+                    """,
+                    (deck_id,),
+                )
+                card_counts = {
+                    int(row["card_id"]): int(row["count"])
+                    for row in cur.fetchall()
+                }
+        finally:
+            conn.close()
+
+        deck = DeckDefinition(
+            name=str(deck_row["name"]),
+            owner=str(deck_row["owner"] or ""),
+            card_counts=card_counts,
+        )
+        self.resolve_deck(deck)
+        if not deck.is_valid():
+            raise ValueError(f"Training deck '{deck.name}' is not a legal 40-card deck")
+
+        return PrebuiltDeckSpec(
+            main_deck=deck,
+            hyperspatial=tuple(self.require(card_id) for card_id in _expand_zone_counts(deck_row["hyperspatial"])),
+            ultra_gr=tuple(self.require(card_id) for card_id in _expand_zone_counts(deck_row["ultra_gr"])),
+            start_battle_zone=tuple(self.require(card_id) for card_id in _expand_zone_list(deck_row["start_battle_zone"])),
+        )
+
+    def sample_training_decks(
+        self,
+        rng,
+        *,
+        count: int = 2,
+        source: str | None = None,
+        allow_mirror: bool = False,
+    ) -> list[tuple[int, Any]]:
+        """Sample resolved training decks for self-play."""
+        deck_ids = self.list_training_deck_ids(source=source, active_only=True)
+        if not deck_ids:
+            raise ValueError("No active training decks found in the database")
+        if not allow_mirror and len(deck_ids) < count:
+            raise ValueError(
+                f"Need at least {count} active training decks; found {len(deck_ids)}"
+            )
+
+        selected_ids = (
+            [rng.choice(deck_ids) for _ in range(count)]
+            if allow_mirror
+            else rng.sample(deck_ids, count)
+        )
+        return [(deck_id, self.load_training_deck(deck_id)) for deck_id in selected_ids]
+
+
+def _zone_counts(cards) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for card in cards:
+        card_id = str(card.id)
+        counts[card_id] = counts.get(card_id, 0) + 1
+    return counts
+
+
+def _json_value(value):
+    if isinstance(value, str):
+        return json.loads(value)
+    if value is None:
+        return {}
+    return value
+
+
+def _expand_zone_counts(value) -> list[int]:
+    data = _json_value(value)
+    if not isinstance(data, dict):
+        raise ValueError("Stored deck zone count must be a JSON object")
+    result: list[int] = []
+    for card_id, count in data.items():
+        result.extend([int(card_id)] * int(count))
+    return result
+
+
+def _expand_zone_list(value) -> list[int]:
+    data = _json_value(value)
+    if not isinstance(data, list):
+        raise ValueError("Stored start_battle_zone must be a JSON array")
+    return [int(card_id) for card_id in data]

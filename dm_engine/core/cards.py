@@ -40,8 +40,8 @@ class CardEffect:
     is_optional:       bool          # player may choose not to use
     is_replacement:    bool          # "instead of X, Y happens"
 
-    active_in_phase:   tuple[str]    # which phases this can fire
-    active_in_zone:    tuple[str]    # which zones the source must be in
+    active_in_phase:   tuple[str, ...]    # which phases this can fire
+    active_in_zone:    tuple[str, ...]    # which zones the source must be in
 
     parse_confidence:  float         # 0.0–1.0, low = may need RAG fallback
 

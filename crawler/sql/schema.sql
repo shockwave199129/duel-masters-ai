@@ -121,6 +121,38 @@ CREATE TABLE IF NOT EXISTS card_relations (
     PRIMARY KEY (card_id, related_slug, relation_type)
 );
 
+-- Training decks used by dm_engine self-play.
+CREATE TABLE IF NOT EXISTS training_decks (
+    id                SERIAL PRIMARY KEY,
+    name              TEXT NOT NULL UNIQUE,
+    owner             TEXT,
+    source            TEXT,
+    is_active         BOOLEAN NOT NULL DEFAULT TRUE,
+    hyperspatial      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ultra_gr          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    start_battle_zone JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE training_decks ADD COLUMN IF NOT EXISTS owner TEXT;
+ALTER TABLE training_decks ADD COLUMN IF NOT EXISTS source TEXT;
+ALTER TABLE training_decks ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE training_decks ADD COLUMN IF NOT EXISTS hyperspatial JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE training_decks ADD COLUMN IF NOT EXISTS ultra_gr JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE training_decks ADD COLUMN IF NOT EXISTS start_battle_zone JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE training_decks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE training_decks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE TABLE IF NOT EXISTS training_deck_cards (
+    deck_id INT NOT NULL REFERENCES training_decks(id) ON DELETE CASCADE,
+    card_id INT NOT NULL REFERENCES cards(id) ON DELETE RESTRICT,
+    count   INT NOT NULL CHECK (count > 0),
+    PRIMARY KEY (deck_id, card_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_training_decks_active ON training_decks(is_active);
+
 -- ============================================================
 -- View for game engine — full card with effects as JSON array
 -- ============================================================

@@ -42,6 +42,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run v2 neural self-play")
     parser.add_argument("--dsn", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--deck-json", type=Path, default=DEFAULT_DECK_JSON)
+    parser.add_argument("--use-db-decks", action="store_true", help="Sample active training decks from the database")
+    parser.add_argument("--deck-source", default=None, help="Only sample database decks with this source")
+    parser.add_argument("--allow-mirror-matches", action="store_true", help="Allow the same database deck on both sides")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--games", type=int, default=15)
     parser.add_argument("--preset", choices=sorted(GAME_PRESETS), default=None, help="Use a standard v2 game count: quick=50, standard=100, large=500")
@@ -93,6 +96,9 @@ def main() -> None:
         model_path=args.model_path,
         terminal_weight=args.terminal_weight,
         overwrite=args.overwrite,
+        use_database_decks=args.use_db_decks,
+        deck_source=args.deck_source,
+        allow_mirror_matches=args.allow_mirror_matches,
     )
     logger.info(
         "Self-play done: games=%s decisions=%s p0_wins=%s p1_wins=%s no_winner_terminal=%s unfinished=%s output=%s",

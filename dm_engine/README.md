@@ -316,10 +316,31 @@ python dm_engine/scripts/run_self_play.py --preset standard --overwrite  # 100 g
 python dm_engine/scripts/run_self_play.py --preset large --overwrite     # 500 games
 ```
 
-Self-play randomizes first player and swaps the two deck seats between games by
-default to reduce Player 0 / Deck 1 bias. Use `--fixed-seating` only when you
-want reproducible old behavior where Player 0 always uses the first deck and
-starts first.
+Self-play balances first player and deck seats between games by default to
+reduce Player 0 / Deck 1 bias. Use `--fixed-seating` only when you want
+reproducible old behavior where Player 0 always uses the first deck and starts
+first.
+
+To train from a larger deck pool, import decks into Postgres and sample two
+active decks for each self-play game:
+
+```bash
+python dm_engine/scripts/import_prebuilt_decks.py --apply-schema
+```
+
+```bash
+python dm_engine/scripts/run_self_play.py \
+  --use-db-decks \
+  --deck-source prebuilt_game \
+  --preset standard \
+  --output data/self_play/gen1_v2_games.jsonl \
+  --overwrite
+```
+
+Database deck mode chooses two active decks at random for each game, assigns
+them to Player 0 / Player 1 with a balanced random-offset schedule, and records
+`deck_ids`, `deck_names`, `player_deck_id`, `player_deck_name`, and
+`first_player` in each training row for auditability.
 
 The JSONL file contains one v2 training row for each decision:
 
@@ -330,6 +351,8 @@ chosen_index
 policy_target
 legal_actions
 player_to_act
+deck_ids
+deck_names
 final_winner
 value_target
 heuristic_target

@@ -277,7 +277,7 @@ def encode_action_v2(action: Action, state=None, db=None) -> list[float]:
     features: list[float] = [
         *_one_hot(action.action_type, _ACTION_TYPES),
         *_one_hot(_action_category(action), _ACTION_CATEGORIES),
-        _norm(action.player, 1),
+        0.0,  # Seat-neutral: state features are already encoded from this player's perspective.
         _bool(action.card_uid),
         _bool(action.target_uid),
         _bool(action.evolution_base_uid),
