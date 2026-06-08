@@ -9,9 +9,9 @@ from pathlib import Path
 
 import torch
 
-from bot.action_encoder import encode_action
+from bot.action_encoder import encode_action_v2
 from bot.neural_model import ActionScoreNet, load_model
-from bot.state_encoder import encode_observation
+from bot.state_encoder import encode_observation_v2
 from core.actions import Action
 from core.state import GameState
 from engine.action_generator import get_legal_actions
@@ -39,18 +39,18 @@ class NeuralBot:
 
     def choose_action(self, state: GameState, db=None) -> Action:
         actions = get_legal_actions(state, db)
-        return self.choose_from_actions(state, actions)
+        return self.choose_from_actions(state, actions, db=db)
 
-    def choose_from_actions(self, state: GameState, actions: list[Action]) -> Action:
+    def choose_from_actions(self, state: GameState, actions: list[Action], db=None) -> Action:
         if not actions:
             raise ValueError("No legal actions available")
         if self.epsilon > 0.0 and self.rng.random() < self.epsilon:
             return self.rng.choice(actions)
 
         perspective = actions[0].player
-        state_features = encode_observation(state, perspective)
+        state_features = encode_observation_v2(state, perspective)
         rows = [
-            state_features + encode_action(action)
+            state_features + encode_action_v2(action, state=state, db=db)
             for action in actions
         ]
         with torch.no_grad():

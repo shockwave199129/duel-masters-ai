@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bot.action_encoder import encode_action
+from bot.action_encoder import ACTION_ENCODER_VERSION, ACTION_VECTOR_SIZE_V2, encode_action_v2
 from bot.neural_bot import NeuralBot
-from bot.state_encoder import encode_observation
+from bot.state_encoder import OBSERVATION_ENCODER_VERSION, OBSERVATION_VECTOR_SIZE_V2, encode_observation_v2
 from core.actions import Action
 from core.enums import GameResult
 from core.state import GameState
@@ -20,6 +20,7 @@ from decks.prebuilt import _apply_extra_zones, prebuilt_deck_from_dict
 from engine.action_executor import execute_action
 from engine.action_generator import get_legal_actions
 from engine.game_runner import validate_invariants
+from training.rewards import blend_targets, heuristic_state_value
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +59,27 @@ def _record_decision(
     state: GameState,
     action: Action,
     legal_actions: list[Action],
+    chosen_index: int,
     deck_slots: tuple[int, int],
     first_player: int,
+    db,
 ) -> dict[str, Any]:
     player = action.player
-    observation = encode_observation(state, player)
-    action_vector = encode_action(action)
+    state_features = encode_observation_v2(state, player)
+    legal_action_features = [
+        encode_action_v2(legal_action, state=state, db=db)
+        for legal_action in legal_actions
+    ]
+    policy_target = [0.0] * len(legal_actions)
+    if 0 <= chosen_index < len(policy_target):
+        policy_target[chosen_index] = 1.0
+    heuristic_target = heuristic_state_value(state, player)
     return {
+        "schema_version": 2,
+        "observation_version": OBSERVATION_ENCODER_VERSION,
+        "action_version": ACTION_ENCODER_VERSION,
+        "observation_vector_size": OBSERVATION_VECTOR_SIZE_V2,
+        "action_vector_size": ACTION_VECTOR_SIZE_V2,
         "game_id": game_id,
         "seed": seed,
         "step": step,
@@ -74,26 +89,37 @@ def _record_decision(
         "first_player": first_player,
         "turn": state.turn_number,
         "phase": state.current_phase.name,
-        "observation": observation,
-        "action": action_vector,
-        "features": observation + action_vector,
+        "state_features": state_features,
+        "legal_action_features": legal_action_features,
+        "chosen_index": chosen_index,
+        "policy_target": policy_target,
+        "chosen_features": state_features + legal_action_features[chosen_index],
         "chosen_action": repr(action),
         "action_repr": repr(action),
         "legal_actions": [repr(legal_action) for legal_action in legal_actions],
         "legal_action_count": len(legal_actions),
         "winner": None,
         "value_target": 0.0,
+        "heuristic_target": heuristic_target,
+        "blended_target": heuristic_target,
     }
 
 
-def _finalize_records(records: list[dict[str, Any]], state: GameState) -> None:
+def _finalize_records(records: list[dict[str, Any]], state: GameState, *, terminal_weight: float = 0.65) -> None:
     winner = _winner_from_result(state.result)
     terminal = state.is_terminal()
     for record in records:
         record["winner"] = winner
         record["terminal"] = terminal
         record["result"] = state.result.value
-        record["value_target"] = _target_for_player(record["player"], winner, terminal)
+        value_target = _target_for_player(record["player"], winner, terminal)
+        record["value_target"] = value_target
+        record["terminal_weight"] = terminal_weight
+        record["blended_target"] = blend_targets(
+            value_target,
+            float(record.get("heuristic_target", 0.0)),
+            terminal_weight=terminal_weight,
+        )
 
 
 def _mark_records_error(records: list[dict[str, Any]], error: Exception) -> None:
@@ -122,6 +148,7 @@ def run_recorded_game(
     first_player: int | None = 0,
     randomize_seating: bool = True,
     model_path: str | Path | None = None,
+    terminal_weight: float = 0.65,
 ) -> tuple[GameState, list[dict[str, Any]]]:
     """Run one neural-vs-neural game and append finalized decision rows."""
     rng = random.Random(seed)
@@ -149,7 +176,8 @@ def run_recorded_game(
             raise RuntimeError("No legal actions available")
 
         acting_player = legal_actions[0].player
-        action = bots[acting_player].choose_from_actions(state, legal_actions)
+        action = bots[acting_player].choose_from_actions(state, legal_actions, db=db)
+        chosen_index = legal_actions.index(action)
         records.append(
             _record_decision(
                 game_id=game_id,
@@ -158,8 +186,10 @@ def run_recorded_game(
                 state=state,
                 action=action,
                 legal_actions=legal_actions,
+                chosen_index=chosen_index,
                 deck_slots=deck_slots,
                 first_player=actual_first_player,
+                db=db,
             )
         )
 
@@ -171,7 +201,7 @@ def run_recorded_game(
             _mark_records_error(records, exc)
             break
 
-    _finalize_records(records, state)
+    _finalize_records(records, state, terminal_weight=terminal_weight)
     _append_jsonl(Path(output_path), records)
     return state, records
 
@@ -188,6 +218,7 @@ def run_self_play_games(
     first_player: int | None = 0,
     randomize_seating: bool = True,
     model_path: str | Path | None = None,
+    terminal_weight: float = 0.65,
     overwrite: bool = False,
 ) -> SelfPlaySummary:
     """Run and record several neural-vs-neural games."""
@@ -203,7 +234,7 @@ def run_self_play_games(
 
     for index in range(games):
         seed = seed_start + index
-        game_id = f"gen0-{index + 1:06d}"
+        game_id = f"gen0-v2-{index + 1:06d}"
         state, records = run_recorded_game(
             db=db,
             deck_json=deck_json,
@@ -216,6 +247,7 @@ def run_self_play_games(
             first_player=first_player,
             randomize_seating=randomize_seating,
             model_path=model_path,
+            terminal_weight=terminal_weight,
         )
         decisions += len(records)
         winner = _winner_from_result(state.result)

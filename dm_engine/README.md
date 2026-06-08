@@ -232,9 +232,9 @@ Save a player-friendly step log to a text file:
 
 ```bash
 python dm_engine/scripts/play_neural_game.py \
-  --model-path dm_engine/models/gen3_action_score.pt \
+  --model-path dm_engine/models/gen1_v2_action_score.pt \
   --mode neural-vs-neural \
-  --report-path data/reports/gen3_game.txt
+  --report-path data/reports/gen1_v2_game.txt
 ```
 
 Use a different prebuilt game JSON:
@@ -272,37 +272,48 @@ next_state = execute_action(state, action, db=db)
 
 ## Observations For AI
 
-Use `Observation` or `encode_observation()` when feeding a bot/model. These hide private information such as the opponent hand and shield contents.
+Use `Observation` or the v2 encoders when feeding a bot/model. These hide
+private information such as the opponent hand, hidden shield contents, exact deck
+order, and opponent deck composition.
 
 ```python
-from bot.state_encoder import encode_observation
+from bot.state_encoder import encode_observation_v2
 
-features = encode_observation(state, player=0)
+features = encode_observation_v2(state, perspective=0)
 ```
 
-Actions are encoded with `bot.action_encoder.encode_action()`. The neural bot
+Actions are encoded with `bot.action_encoder.encode_action_v2()`. The neural bot
 concatenates:
 
 ```text
-encode_observation(state, player) + encode_action(action)
+encode_observation_v2(state, player) + encode_action_v2(action, state, db)
 ```
 
 and feeds that vector into `ActionScoreNet`, which returns one score for that
-legal action.
+legal action. v2 uses aggregated/bucketed state features and compact action
+metadata rather than raw card-ID slots.
 
 ## Training The Neural Bot
 
-The first reinforcement-learning loop is intentionally simple: run neural
-self-play, save chosen decisions, train `ActionScoreNet` against final
-win/loss reward, and then load the saved gen-1 weights.
+The v2 reinforcement-learning loop records all legal actions for each decision,
+stores the chosen action index, and trains `ActionScoreNet` using blended targets:
+final win/loss plus a bounded heuristic score for non-terminal signal.
 
-Run 15 gen-0 neural-vs-neural games and save every decision:
+Run v2 gen-0 neural-vs-neural games and save every decision:
 
 ```bash
 python dm_engine/scripts/run_self_play.py \
-  --games 15 \
-  --output data/self_play/gen0_games.jsonl \
+  --games 50 \
+  --output data/self_play/gen0_v2_games.jsonl \
   --overwrite
+```
+
+You can also use presets:
+
+```bash
+python dm_engine/scripts/run_self_play.py --preset quick --overwrite     # 50 games
+python dm_engine/scripts/run_self_play.py --preset standard --overwrite  # 100 games
+python dm_engine/scripts/run_self_play.py --preset large --overwrite     # 500 games
 ```
 
 Self-play randomizes first player and swaps the two deck seats between games by
@@ -310,25 +321,31 @@ default to reduce Player 0 / Deck 1 bias. Use `--fixed-seating` only when you
 want reproducible old behavior where Player 0 always uses the first deck and
 starts first.
 
-The JSONL file contains one training row for each decision:
+The JSONL file contains one v2 training row for each decision:
 
 ```text
-observation_vector
-action_vector
-chosen_action
+state_features
+legal_action_features
+chosen_index
+policy_target
 legal_actions
 player_to_act
 final_winner
 value_target
+heuristic_target
+blended_target
 ```
 
-The trainer uses final game result as the value target:
+The v2 trainer flattens each legal-action set into action-score examples. The
+chosen action receives `blended_target`; non-chosen legal actions receive a lower
+heuristic target. The default blend favors terminal outcome:
 
 ```text
-+1 if the player who made the decision won
--1 if that player lost
- 0 for unfinished or no-winner internal safety result
+blended_target = 0.65 * value_target + 0.35 * heuristic_target
 ```
+
+`value_target` is `+1` if the player who made the decision won, `-1` if they
+lost, and `0` for unfinished training games.
 
 Duel Masters games are treated as win/loss games. In self-play, reaching
 `--max-steps` does not create a draw; it is recorded as unfinished training data
@@ -338,8 +355,8 @@ Train gen 1 from the recorded decisions:
 
 ```bash
 python dm_engine/scripts/train_action_score.py \
-  --input data/self_play/gen0_games.jsonl \
-  --output dm_engine/models/gen1_action_score.pt \
+  --input data/self_play/gen0_v2_games.jsonl \
+  --output dm_engine/models/gen1_v2_action_score.pt \
   --epochs 10
 ```
 
@@ -347,18 +364,18 @@ Then run the trained model:
 
 ```bash
 python dm_engine/scripts/play_neural_game.py \
-  --model-path dm_engine/models/gen1_action_score.pt \
+  --model-path dm_engine/models/gen1_v2_action_score.pt \
   --mode neural-vs-neural \
   --max-steps 1000
 ```
 
 Recommended training milestones:
 
-1. Record 15 gen-0 neural-vs-neural games.
-2. Train `ActionScoreNet` to predict final win/loss from `(state, action)`.
-3. Run `NeuralBot` with `dm_engine/models/gen1_action_score.pt`.
-4. Record better self-play data from gen-1 neural bots.
-5. Later add policy targets, replay sampling, and MCTS only after the engine is stable.
+1. Record 50 gen-0 v2 neural-vs-neural games for a quick check.
+2. Train `ActionScoreNet` from v2 legal-action rows.
+3. Run `NeuralBot` with `dm_engine/models/gen1_v2_action_score.pt`.
+4. Record 100, then 500+ better self-play games from the latest model.
+5. Add policy/value heads and MCTS only after the v2 pipeline and engine are stable.
 
 ## Run Tests
 

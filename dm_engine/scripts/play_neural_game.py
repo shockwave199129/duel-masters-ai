@@ -41,7 +41,7 @@ def _load_env_file(path: Path) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run gen-0 neural bot games")
+    parser = argparse.ArgumentParser(description="Run v2 neural bot games")
     parser.add_argument("--dsn", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--deck-json", type=Path, default=DEFAULT_DECK_JSON)
     parser.add_argument("--model-path", type=Path, default=None)
@@ -138,7 +138,7 @@ def _run_logged_game(
         acting_player = legal_actions[0].player
         bot = bot0 if acting_player == 0 else bot1
         if isinstance(bot, NeuralBot):
-            action = bot.choose_from_actions(state, legal_actions)
+            action = bot.choose_from_actions(state, legal_actions, db=db)
         else:
             action = bot.rng.choice(legal_actions)
 
@@ -182,7 +182,7 @@ def main() -> None:
         db,
         first_player=args.first_player,
         seed=args.seed,
-        game_id="gen0-neural-game",
+        game_id="v2-neural-game",
     )
 
     bot0_seed = args.seed

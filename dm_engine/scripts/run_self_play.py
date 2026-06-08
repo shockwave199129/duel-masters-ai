@@ -19,7 +19,12 @@ from training.self_play import run_self_play_games
 logger = logging.getLogger("run_self_play")
 
 DEFAULT_DECK_JSON = DM_ENGINE_ROOT / "decks" / "prebuilt_game.json"
-DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "self_play" / "gen0_games.jsonl"
+DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "self_play" / "gen0_v2_games.jsonl"
+GAME_PRESETS = {
+    "quick": 50,
+    "standard": 100,
+    "large": 500,
+}
 
 
 def _load_env_file(path: Path) -> None:
@@ -34,16 +39,18 @@ def _load_env_file(path: Path) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run gen-0 neural self-play")
+    parser = argparse.ArgumentParser(description="Run v2 neural self-play")
     parser.add_argument("--dsn", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--deck-json", type=Path, default=DEFAULT_DECK_JSON)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--games", type=int, default=15)
+    parser.add_argument("--preset", choices=sorted(GAME_PRESETS), default=None, help="Use a standard v2 game count: quick=50, standard=100, large=500")
     parser.add_argument("--seed-start", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=1000)
     parser.add_argument("--epsilon", type=float, default=0.05)
     parser.add_argument("--first-player", type=int, choices=[0, 1], default=0)
     parser.add_argument("--model-path", type=Path, default=None)
+    parser.add_argument("--terminal-weight", type=float, default=0.65, help="Weight for final win/loss when blending with heuristic targets")
     parser.add_argument(
         "--fixed-seating",
         action="store_true",
@@ -66,6 +73,8 @@ def main() -> None:
     )
     parser = _build_parser()
     args = parser.parse_args()
+    if args.preset is not None:
+        args.games = GAME_PRESETS[args.preset]
     if not args.dsn:
         parser.error("--dsn is required unless DATABASE_URL is set in crawler/.env")
 
@@ -82,6 +91,7 @@ def main() -> None:
         first_player=args.first_player,
         randomize_seating=not args.fixed_seating,
         model_path=args.model_path,
+        terminal_weight=args.terminal_weight,
         overwrite=args.overwrite,
     )
     logger.info(

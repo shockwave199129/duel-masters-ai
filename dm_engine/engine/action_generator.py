@@ -41,6 +41,7 @@ During random play, a valid combination is chosen at random.
 
 from __future__ import annotations
 import itertools
+import re
 from typing import Optional
 
 from core.enums import (
@@ -1009,16 +1010,31 @@ def _g_zero_condition_met(
 # Ninja Strike cost check  (rule 112.3c)
 # ─────────────────────────────────────────────────────────────────────────────
 
+_NINJA_STRIKE_RE = re.compile(r"ninja\s*strike\s+(\d+)", re.IGNORECASE)
+
+
 def _get_ninja_strike_cost(defn: CardDefinition) -> Optional[int]:
     """
-    Rule 112.3c: Ninja Strike can be used if the mana count >= threshold.
-    The threshold is specified in the card's Ninja Strike ability text,
-    stored in card_effects.effect_value.
+    Rule 112.3c: Ninja Strike can be used if the number of cards in the mana
+    zone is >= the ability's threshold ("Ninja Strike N").
 
-    Simplified: return the card's mana cost as a proxy threshold.
-    Full implementation reads from card_effects row.
+    The threshold N comes from the Ninja Strike ability text — it is the
+    ability's own value, NOT the creature's printed summon cost (which is
+    usually higher). We read N from the parsed effect rows; the card's printed
+    cost is only a last-resort fallback if the text cannot be parsed.
     """
-    # Simplified: treat the card's printed cost as the mana threshold.
+    for effect in defn.effects:
+        for text in (
+            effect.raw_text,
+            effect.effect_value.get("text") if isinstance(effect.effect_value, dict) else None,
+            effect.trigger_condition.get("text") if isinstance(effect.trigger_condition, dict) else None,
+        ):
+            if not text:
+                continue
+            match = _NINJA_STRIKE_RE.search(text)
+            if match:
+                return int(match.group(1))
+    # Fallback: text was not parseable — use the printed cost as a proxy.
     return defn.cost
 
 

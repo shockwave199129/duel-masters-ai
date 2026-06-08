@@ -225,7 +225,7 @@ class PlayerState:
             creature.untap()
 
     def clear_summoning_sickness(self) -> None:
-        """Called at END of turn — creatures that survived are no longer sick next turn."""
+        """Clear summoning sickness on every creature in the battle zone."""
         for creature in self.battle_zone:
             creature.clear_summoning_sickness()
 

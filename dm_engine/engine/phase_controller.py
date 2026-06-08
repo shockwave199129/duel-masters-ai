@@ -56,13 +56,18 @@ def _start_turn(state: GameState) -> None:
     p_state = state.players[player]
     p_state.reset_turn_flags()
     p_state.untap_all()
+    # Rule 301.5 / 506.1a: creatures present since before this turn began lose
+    # summoning sickness now. This correctly includes creatures that entered
+    # during the opponent's turn (Shield Trigger summons, Ninja Strike, etc.).
+    for creature in p_state.battle_zone:
+        if creature.entered_turn < state.turn_number:
+            creature.clear_summoning_sickness()
 
 
 def _end_turn(state: GameState) -> None:
     player = state.active_player
     p_state = state.players[player]
     p_state.expire_eot_effects()
-    p_state.clear_summoning_sickness()
     state.global_effects.expire_eot()
     state.attack_context = None
 

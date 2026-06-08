@@ -113,9 +113,9 @@ Save a player-friendly text report:
 
 ```bash
 python dm_engine/scripts/play_neural_game.py \
-  --model-path dm_engine/models/gen3_action_score.pt \
+  --model-path dm_engine/models/gen1_v2_action_score.pt \
   --mode neural-vs-neural \
-  --report-path data/reports/gen3_game.txt
+  --report-path data/reports/gen1_v2_game.txt
 ```
 
 See `dm_engine/README.md` for deck JSON format, bot usage, and engine details.
@@ -126,17 +126,21 @@ Run self-play and save training decisions:
 
 ```bash
 python dm_engine/scripts/run_self_play.py \
-  --games 15 \
-  --output data/self_play/gen0_games.jsonl \
+  --preset quick \
+  --output data/self_play/gen0_v2_games.jsonl \
   --overwrite
 ```
+
+Presets are `quick` (50 games), `standard` (100 games), and `large` (500 games).
+The v2 dataset records all legal actions, chosen action index, policy target,
+value target, heuristic target, and blended target.
 
 Train generation 1:
 
 ```bash
 python dm_engine/scripts/train_action_score.py \
-  --input data/self_play/gen0_games.jsonl \
-  --output dm_engine/models/gen1_action_score.pt \
+  --input data/self_play/gen0_v2_games.jsonl \
+  --output dm_engine/models/gen1_v2_action_score.pt \
   --epochs 10
 ```
 
@@ -144,9 +148,9 @@ Generate generation 2 data from generation 1:
 
 ```bash
 python dm_engine/scripts/run_self_play.py \
-  --games 25 \
-  --model-path dm_engine/models/gen1_action_score.pt \
-  --output data/self_play/gen1_games.jsonl \
+  --preset standard \
+  --model-path dm_engine/models/gen1_v2_action_score.pt \
+  --output data/self_play/gen1_v2_games.jsonl \
   --overwrite
 ```
 
@@ -154,8 +158,8 @@ Train generation 2:
 
 ```bash
 python dm_engine/scripts/train_action_score.py \
-  --input data/self_play/gen1_games.jsonl \
-  --output dm_engine/models/gen2_action_score.pt \
+  --input data/self_play/gen1_v2_games.jsonl \
+  --output dm_engine/models/gen2_v2_action_score.pt \
   --epochs 10
 ```
 
