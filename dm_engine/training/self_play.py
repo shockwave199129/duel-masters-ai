@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from bot.action_encoder import ACTION_ENCODER_VERSION, ACTION_VECTOR_SIZE_V2, encode_action_v2
-from bot.neural_bot import NeuralBot
 from bot.state_encoder import OBSERVATION_ENCODER_VERSION, OBSERVATION_VECTOR_SIZE_V2, encode_observation_v2
 from core.actions import Action
 from core.enums import GameResult
@@ -165,6 +164,8 @@ def run_recorded_game(
     allow_mirror_matches: bool = False,
 ) -> tuple[GameState, list[dict[str, Any]]]:
     """Run one neural-vs-neural game and append finalized decision rows."""
+    from bot.neural_bot import NeuralBot
+
     rng = random.Random(seed)
     state, deck_slots, deck_ids, deck_names, actual_first_player = _load_self_play_state(
         deck_json=deck_json,
