@@ -11,7 +11,15 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from bot.neural_model import MODEL_INPUT_SIZE, ActionScoreNet, save_model
+from bot.action_encoder import ACTION_VECTOR_SIZE_V2
+from bot.neural_model import (
+    DEFAULT_DROPOUT,
+    DEFAULT_HIDDEN_SIZE,
+    DEFAULT_NUM_BLOCKS,
+    ActionScoreNet,
+    save_model,
+)
+from bot.state_encoder import OBSERVATION_VECTOR_SIZE_V2
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +41,34 @@ def _load_jsonl_dataset(path: str | Path) -> TensorDataset:
             if not line:
                 continue
             row = json.loads(line)
-            feature_row = row.get("features")
-            if not isinstance(feature_row, list) or len(feature_row) != MODEL_INPUT_SIZE:
+            if row.get("schema_version") != 2:
                 raise ValueError(
-                    f"Invalid feature vector at {path}:{line_number}; "
-                    f"expected {MODEL_INPUT_SIZE} values"
+                    f"Unsupported training row at {path}:{line_number}; "
+                    "v2 trainer requires schema_version=2"
                 )
-            features.append([float(value) for value in feature_row])
-            targets.append(float(row.get("value_target", 0.0)))
+            state_features = row.get("state_features")
+            legal_action_features = row.get("legal_action_features")
+            chosen_index = int(row.get("chosen_index", -1))
+            if not isinstance(state_features, list) or len(state_features) != OBSERVATION_VECTOR_SIZE_V2:
+                raise ValueError(
+                    f"Invalid state_features at {path}:{line_number}; "
+                    f"expected {OBSERVATION_VECTOR_SIZE_V2} values"
+                )
+            if not isinstance(legal_action_features, list) or not legal_action_features:
+                raise ValueError(f"Missing legal_action_features at {path}:{line_number}")
+
+            chosen_target = float(row.get("blended_target", row.get("value_target", 0.0)))
+            heuristic_target = float(row.get("heuristic_target", 0.0))
+            non_chosen_target = max(-1.0, min(1.0, heuristic_target - 0.10))
+
+            for index, action_features in enumerate(legal_action_features):
+                if not isinstance(action_features, list) or len(action_features) != ACTION_VECTOR_SIZE_V2:
+                    raise ValueError(
+                        f"Invalid action vector at {path}:{line_number}; "
+                        f"expected {ACTION_VECTOR_SIZE_V2} values"
+                    )
+                features.append([float(value) for value in state_features + action_features])
+                targets.append(chosen_target if index == chosen_index else non_chosen_target)
 
     if not features:
         raise ValueError(f"No training rows found in {path}")
@@ -57,7 +85,9 @@ def train_action_score_model(
     epochs: int = 10,
     batch_size: int = 64,
     lr: float = 1e-3,
-    hidden_size: int = 128,
+    hidden_size: int = DEFAULT_HIDDEN_SIZE,
+    num_blocks: int = DEFAULT_NUM_BLOCKS,
+    dropout: float = DEFAULT_DROPOUT,
     seed: int = 1,
 ) -> TrainSummary:
     """Train and save an ActionScoreNet checkpoint."""
@@ -69,7 +99,11 @@ def train_action_score_model(
     torch.manual_seed(seed)
     dataset = _load_jsonl_dataset(input_path)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    model = ActionScoreNet(hidden_size=hidden_size)
+    model = ActionScoreNet(
+        hidden_size=hidden_size,
+        num_blocks=num_blocks,
+        dropout=dropout,
+    )
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.MSELoss()
     final_loss = 0.0

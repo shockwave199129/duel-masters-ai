@@ -12,12 +12,13 @@ PROJECT_ROOT = DM_ENGINE_ROOT.parent
 if str(DM_ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(DM_ENGINE_ROOT))
 
+from bot.neural_model import DEFAULT_DROPOUT, DEFAULT_HIDDEN_SIZE, DEFAULT_NUM_BLOCKS
 from training.train_action_score import train_action_score_model
 
 logger = logging.getLogger("train_action_score")
 
-DEFAULT_INPUT = PROJECT_ROOT / "data" / "self_play" / "gen0_games.jsonl"
-DEFAULT_OUTPUT = DM_ENGINE_ROOT / "models" / "gen1_action_score.pt"
+DEFAULT_INPUT = PROJECT_ROOT / "data" / "self_play" / "gen0_v2_games.jsonl"
+DEFAULT_OUTPUT = DM_ENGINE_ROOT / "models" / "gen1_v2_action_score.pt"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -27,7 +28,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--hidden-size", type=int, default=128)
+    parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
+    parser.add_argument("--num-blocks", type=int, default=DEFAULT_NUM_BLOCKS)
+    parser.add_argument("--dropout", type=float, default=DEFAULT_DROPOUT)
     parser.add_argument("--seed", type=int, default=1)
     return parser
 
@@ -46,6 +49,8 @@ def main() -> None:
         batch_size=args.batch_size,
         lr=args.lr,
         hidden_size=args.hidden_size,
+        num_blocks=args.num_blocks,
+        dropout=args.dropout,
         seed=args.seed,
     )
     logger.info(
