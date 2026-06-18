@@ -56,6 +56,7 @@ from core.actions import (
     charge_mana, pass_charge,
     summon_creature, cast_spell, generate_cross_gear,
     cross_gear, fortify_castle, deploy_field, execute_tamaseed,
+    combine_king_creature,
     pass_main,
     attack_player, attack_creature, pass_attack,
     declare_blocker, declare_guardman, pass_block,
@@ -63,7 +64,7 @@ from core.actions import (
     use_g_zero, use_g_strike,
     hyperize,
     select_yes_no, select_target, select_targets,
-    select_card, select_evolution_base,
+    select_card, select_mana, select_evolution_base,
     pass_action,
 )
 
@@ -290,6 +291,10 @@ def _generate_main_actions(state: GameState, db=None) -> list[Action]:
                 and not creature.is_ignored):
             actions.append(hyperize(player, creature.uid, creature.id))
 
+    # ── King Cell combine (rule 814.1c) ─────────────────────────────────────
+    if db is not None:
+        actions.extend(_king_combine_actions(player, state, db))
+
     # ── Pass (end main step) ───────────────────────────────────────────────
     actions.append(pass_main(player))
     return actions
@@ -314,6 +319,10 @@ def _actions_for_hand_card(
 
     # ── Creatures ──────────────────────────────────────────────────────────
     if card_type == CardType.CREATURE:
+        # Rule 814.1: King Creatures are only summoned by combining cells.
+        if defn.is_king_creature():
+            return []
+
         # Global restriction check (rule 101.2)
         if not state.global_effects.can_summon_creature(
             player,
@@ -331,9 +340,13 @@ def _actions_for_hand_card(
 
         # ── Evolution creatures (rule 801) ────────────────────────────────
         if defn.is_evolution():
+            # Rule 815.1: S-MAX can be summoned without a base
+            is_smax = defn.card_subtype == CardSubtype.STAR_MAX
+
+            # Rule 802.1: NEO can be played as normal creature OR evolved
+            is_neo = defn.card_subtype == CardSubtype.NEO_EVOLUTION
+
             valid_bases = _get_valid_evolution_bases(defn, p_state)
-            if not valid_bases:
-                return actions  # no valid base → cannot summon
 
             # Apply cost modifiers and get mana combinations
             effective_cost = _compute_effective_cost(defn, state, player)
@@ -342,6 +355,37 @@ def _actions_for_hand_card(
             )
             if not combos:
                 return actions  # can't afford
+
+            # ── S-MAX: can summon without base (rule 815.1) ─────────────────
+            if is_smax:
+                for combo in combos:
+                    actions.append(summon_creature(
+                        player, card_uid, defn.id, combo,
+                        evolution_base_uid=None  # No base for S-MAX
+                    ))
+                return actions
+
+            # ── NEO: can play as normal creature OR evolved (rule 802.1) ────
+            if is_neo:
+                # Always allow normal (non-evolved) summon
+                for combo in combos:
+                    actions.append(summon_creature(
+                        player, card_uid, defn.id, combo,
+                        evolution_base_uid=None  # Normal summon, not evolved
+                    ))
+                # Additionally allow evolved summon if valid base exists
+                if valid_bases:
+                    for base in valid_bases:
+                        for combo in combos:
+                            actions.append(summon_creature(
+                                player, card_uid, defn.id, combo,
+                                evolution_base_uid=base.uid
+                            ))
+                return actions
+
+            # ── Standard evolution: requires a valid base (rule 801.1a) ─────
+            if not valid_bases:
+                return actions  # no valid base → cannot summon
 
             for base in valid_bases:
                 for combo in combos:
@@ -730,9 +774,10 @@ def _generate_choice_actions(state: GameState) -> list[Action]:
 
     elif choice.choice_type == "select_target":
         for target_uid in options:
+            zone = choice.effect.active_in_zone[0] if choice.effect and choice.effect.active_in_zone else "battle_zone"
             actions.append(select_target(
                 player, target_uid,
-                choice.effect.active_in_zone[0] if choice.effect else "battle_zone",
+                zone,
                 choice.source_uid,
             ))
         # "up_to" effects allow choosing fewer targets → include pass
@@ -747,6 +792,36 @@ def _generate_choice_actions(state: GameState) -> list[Action]:
                 choice.effect.active_in_zone[0] if choice.effect else "hand",
             ))
 
+    elif choice.choice_type == "select_mana":
+        # Generate one select_mana action per valid mana combination.
+        # The effect's effect_value may carry cost/civ info; if not,
+        # fall back to all untapped mana in the player's zone.
+        p_state = state.players[player]
+        mana_zone = p_state.mana_zone
+        ev = choice.effect.effect_value if choice.effect else {}
+        cost = int(ev.get("cost", 0)) if ev else 0
+        card_civs: frozenset = frozenset()
+        if choice.effect and len(choice.effect.civilizations) > 0:
+            card_civs = choice.effect.civilizations
+        combos = _get_mana_combinations(mana_zone, cost, card_civs)
+        for combo in combos:
+            actions.append(select_mana(player, list(combo), choice.source_uid))
+        if not actions:
+            # No valid mana combos — allow pass to decline
+            actions.append(pass_action(player, "select_mana_none"))
+
+    elif choice.choice_type == "select_targets":
+        # Multi-target: generate one action per valid target uid.
+        for target_uid in options:
+            actions.append(select_targets(
+                player, [target_uid],
+                choice.effect.active_in_zone[0] if choice.effect and choice.effect.active_in_zone else "battle_zone",
+                choice.source_uid,
+            ))
+        # "up to N" effects allow choosing fewer targets → include pass
+        if choice.min_choices == 0:
+            actions.append(pass_action(player, "select_targets_done"))
+
     elif choice.choice_type in ("shield_trigger", "g_strike"):
         # yes = use, no = add to hand
         actions.append(select_yes_no(player, True,  choice.source_uid))
@@ -759,6 +834,46 @@ def _generate_choice_actions(state: GameState) -> list[Action]:
 
     if not actions:
         actions.append(pass_action(player, "choice_fizzle"))
+
+    return actions
+
+
+def _king_combine_actions(player: int, state: GameState, db) -> list[Action]:
+    """
+    Rule 814.1c: combine King Cells from hand/mana into a King Creature.
+    """
+    actions: list[Action] = []
+    p_state = state.players[player]
+
+    available: dict[str, list[str]] = {}
+    for hand_card in p_state.hand:
+        if hand_card.definition.is_king_cell():
+            available.setdefault(hand_card.definition.slug, []).append(hand_card.uid)
+    for mana_card in p_state.mana_zone:
+        if mana_card.definition.is_king_cell():
+            available.setdefault(mana_card.definition.slug, []).append(mana_card.uid)
+
+    for defn in db.all_cards():
+        if not defn.is_king_creature():
+            continue
+        required = sorted(defn.king_combine_required_slugs)
+        if not required or not all(slug in available for slug in required):
+            continue
+
+        uid_lists = [available[slug] for slug in required]
+        for pick in itertools.product(*uid_lists):
+            if len(set(pick)) != len(pick):
+                continue
+            cell_uids = list(pick)
+            combos = _get_mana_combinations(
+                p_state.mana_zone,
+                defn.cost,
+                defn.civilizations,
+            )
+            for combo in combos:
+                actions.append(
+                    combine_king_creature(player, defn.id, cell_uids, combo)
+                )
 
     return actions
 
@@ -915,13 +1030,15 @@ def _get_valid_evolution_bases(
 
     The evolution base must:
       - Be a creature (or appropriate card type per the evolution spec)
-      - Have at least one matching race from defn.evolution_source_races
-      - Not be ignored (rule 116.2: ignored creatures can't be evolved onto
-        because they effectively don't exist)
+      - Match the evolution requirements:
+        * At least one matching race from defn.evolution_source_races, OR
+        * At least one matching type from defn.evolution_source_types
+      - Not be ignored (rule 116.2: ignored creatures can't be evolved onto)
 
     Special cases:
-      - S-MAX Evolution (rule 815): no base required — handled separately.
+      - S-MAX Evolution (rule 815): no base required — handled in caller.
       - Star Evolution (rule 813): needs a base of any creature.
+      - Forbidden Star Evolution (rule 813.1b): can summon without base.
     """
     # S-MAX: no base required
     if defn.card_subtype == CardSubtype.STAR_MAX:
@@ -933,12 +1050,25 @@ def _get_valid_evolution_bases(
             continue
         if creature.definition.card_type != CardType.CREATURE:
             continue
-        # Check race match
-        if defn.evolution_source_races:
-            # At least one required race must be present in the base
-            if not defn.evolution_source_races.intersection(creature.races):
-                continue
-        valid.append(creature)
+
+        # Check evolution requirements: race OR type match
+        has_race_match = (
+            defn.evolution_source_races and
+            defn.evolution_source_races.intersection(creature.definition.races)
+        )
+        has_type_match = (
+            defn.evolution_source_types and
+            creature.definition.card_type in defn.evolution_source_types
+        )
+
+        if defn.evolution_source_races or defn.evolution_source_types:
+            # At least one requirement exists → must match at least one
+            if has_race_match or has_type_match:
+                valid.append(creature)
+        else:
+            # No specific requirements → any creature is a valid base
+            # (e.g., Star Evolution, generic evolution)
+            valid.append(creature)
 
     return valid
 

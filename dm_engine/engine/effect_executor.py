@@ -6,7 +6,7 @@ import random
 
 from core.cards import CardDefinition
 from core.enums import EffectAction
-from core.state import GameState, PendingTrigger
+from core.state import AwaitedChoice, GameState, PendingTrigger
 from core.zones import Creature, HandCard, ManaCard, ShieldCard, PowerModifier
 from engine.sba_checker import check_state_based_actions
 from engine.zone_mover import (
@@ -27,12 +27,89 @@ from engine.zone_mover import (
 )
 
 
+def _effect_needs_choice(effect: CardEffect, trigger_data: dict) -> str | None:
+    """
+    Determine whether an effect requires player input before it can resolve.
+
+    Returns the choice_type string if a choice is needed, or None if the
+    effect can auto-resolve.
+
+    Choice detection rules:
+      - is_optional effects → "yes_no" (use it or not)
+      - effect_target with target selection → "select_target"
+      - effect_value with "requires_choice": true → "yes_no"
+      - effect_value with card selection → "select_card"
+      - effect_value with mana re-selection → "select_mana"
+    """
+    # Optional effects ask "do you want to use this?"
+    if effect.is_optional:
+        return "yes_no"
+
+    # Explicit requires_choice flag in effect_value
+    ev = effect.effect_value or {}
+    if ev.get("requires_choice") is True:
+        return "yes_no"
+
+    # Target selection needed
+    et = effect.effect_target or {}
+    if et.get("type") in ("creature", "shield", "card", "player"):
+        return "select_target"
+
+    # Card selection needed (e.g. "choose a card from hand")
+    if "card_uid" in ev and ev.get("from_zone"):
+        return "select_card"
+
+    # Mana re-selection needed
+    if "select_mana" in ev:
+        return "select_mana"
+
+    return None
+
+
 def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameState:
-    """Execute one pending trigger and run SBAs after it resolves."""
+    """Execute one pending trigger and run SBAs after it resolves.
+
+    If the effect requires a player choice (target selection, yes/no, etc.),
+    an AwaitedChoice is set on the effect stack and the trigger is NOT
+    resolved — the caller must stop processing further triggers.
+    """
     s = state.copy()
     effect = trigger.effect
-    action = effect.effect_action
     controller = trigger.controller
+
+    # Check if this effect needs a player choice before resolving
+    choice_type = _effect_needs_choice(effect, trigger.trigger_data)
+    if choice_type is not None:
+        valid_options: list = []
+        min_choices = 1
+
+        if choice_type == "yes_no":
+            valid_options = [True, False]
+        elif choice_type == "select_target":
+            et = effect.effect_target or {}
+            zone = et.get("zone", "battle_zone")
+            valid_options = _collect_target_options(s, controller, zone, et)
+        elif choice_type == "select_card":
+            ev = effect.effect_value or {}
+            from_zone = ev.get("from_zone", "hand")
+            valid_options = _collect_card_options(s, controller, from_zone)
+        elif choice_type == "select_mana":
+            # For mana selection, options are generated dynamically by
+            # _generate_choice_actions based on current mana zone state.
+            valid_options = ["mana_combo"]  # placeholder; action_generator expands
+
+        s.effect_stack.set_choice(AwaitedChoice(
+            choice_type=choice_type,
+            player=controller,
+            effect=effect,
+            source_uid=trigger.source_uid,
+            valid_options=valid_options,
+            min_choices=min_choices,
+            prompt=effect.raw_text or f"Choose for {effect.effect_action.value}",
+        ))
+        return s  # paused — do not execute or pop further triggers
+
+    action = effect.effect_action
 
     if action == EffectAction.DRAW:
         _do_draw(s, controller, trigger)
@@ -159,6 +236,42 @@ def _remove_deck_card(state: GameState, player: int, card_id: int) -> CardDefini
 
 def _source_uid(trigger: PendingTrigger) -> str:
     return trigger.source_uid
+
+
+def _collect_target_options(
+    state: GameState, player: int, zone: str, et: dict
+) -> list[str]:
+    """Collect valid target uids for a select_target choice from the given zone."""
+    targets: list[str] = []
+    if zone == "battle_zone":
+        for p in state.players:
+            for creature in p.battle_zone:
+                targets.append(creature.uid)
+    elif zone == "shield_zone":
+        for p in state.players:
+            for shield in p.shield_zone:
+                targets.append(shield.uid)
+    elif zone == "mana_zone":
+        for p in state.players:
+            for mana in p.mana_zone:
+                targets.append(mana.uid)
+    elif zone == "hand":
+        p = state.players[player]
+        for card in p.hand:
+            targets.append(card.uid)
+    return targets
+
+
+def _collect_card_options(state: GameState, player: int, from_zone: str) -> list[str]:
+    """Collect valid card uids for a select_card choice from the given zone."""
+    p = state.players[player]
+    if from_zone == "hand":
+        return [c.uid for c in p.hand]
+    elif from_zone == "deck":
+        return [c.uid for c in p.deck]
+    elif from_zone == "graveyard":
+        return [c.uid for c in p.graveyard]
+    return []
 
 
 def _move_card_to_hand(state: GameState, player: int, definition: CardDefinition, uid: str | None = None) -> HandCard:
