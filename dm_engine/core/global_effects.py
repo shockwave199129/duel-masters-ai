@@ -302,12 +302,16 @@ class GlobalEffectRegistry:
         civ: Optional[str] = None,
     ) -> list[str]:
         """
-        Return keyword strings granted by GRANT_KEYWORD_ALL effects
-        to a creature with the given controller/race/civ.
+        Return keyword strings granted by GRANT_KEYWORD_ALL and
+        PER_CARD_KEYWORD_GRANT effects to a creature with the given
+        controller/race/civ.
         """
         granted = []
         for eff in self.effects:
-            if eff.effect_type != GlobalEffectType.GRANT_KEYWORD_ALL:
+            if eff.effect_type not in (
+                GlobalEffectType.GRANT_KEYWORD_ALL,
+                GlobalEffectType.PER_CARD_KEYWORD_GRANT,
+            ):
                 continue
             if eff.grant_to_controller is not None and eff.grant_to_controller != controller:
                 continue
