@@ -240,6 +240,38 @@ class GlobalEffectRegistry:
 
     # ── Full state summary (for debugging / logging) ──────────────────────────
 
+    def get_per_card_power_bonus(
+        self,
+        creature: "Creature",
+    ) -> int:
+        """
+        Returns total power modification from PER_CARD_POWER_MOD global effects
+        for a specific creature. Checks civilization/race filters and self-exclusion.
+        """
+        total = 0
+        for eff in self.effects:
+            if eff.effect_type != GlobalEffectType.PER_CARD_POWER_MOD:
+                continue
+            # Skip if the effect is from this creature itself and self-exclusion is on
+            if eff.per_card_filter_self and eff.applied_by_uid == creature.uid:
+                continue
+            # Check civilization filter
+            if eff.per_card_filter_civ is not None:
+                # per_card_filter_civ is stored as a string like "Fire"
+                from core.enums import Civilization
+                try:
+                    required_civ = Civilization(eff.per_card_filter_civ)
+                except ValueError:
+                    continue
+                if required_civ not in creature.civilizations:
+                    continue
+            # Check race filter
+            if eff.per_card_filter_race is not None:
+                if eff.per_card_filter_race not in creature.races:
+                    continue
+            total += eff.power_mod_amount
+        return total
+
     def active_restrictions_for_player(self, player: int) -> list[str]:
         """Human-readable list of active restrictions for a player."""
         result = []

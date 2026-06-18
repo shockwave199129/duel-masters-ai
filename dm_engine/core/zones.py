@@ -404,6 +404,9 @@ class Creature:
                 total += mod.amount * count
             else:
                 total += mod.amount
+        # Add per-card global power bonuses (static aura effects)
+        if game_state_ref is not None:
+            total += game_state_ref.global_effects.get_per_card_power_bonus(self)
         return total
 
     def _compute_cda_power(self, game_state_ref=None) -> int:
