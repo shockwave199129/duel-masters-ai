@@ -56,6 +56,37 @@ def _trigger_condition_matches(state: GameState, trigger: PendingTrigger) -> boo
     if not condition:
         return True
 
+    return _eval_condition(state, trigger, condition)
+
+
+def _eval_condition(state: GameState, trigger: PendingTrigger, condition: dict) -> bool:
+    """Evaluate a single condition dict against the current game state.
+
+    Supports the original flat keys (controller, source_uid, etc.) plus:
+      - from_zone / to_zone: zone-change checks against trigger_data
+      - min_turn / max_turn: turn counter checks against state.turn_info
+      - shield_count_min / shield_count_max: controller shield count
+      - any_of: list of sub-conditions (OR — any match passes)
+      - not: single sub-condition dict (negation)
+    """
+    # --- OR combinator ---
+    if "any_of" in condition:
+        sub_conditions = condition["any_of"]
+        if not isinstance(sub_conditions, list):
+            return False
+        return any(
+            _eval_condition(state, trigger, sub) for sub in sub_conditions
+        )
+
+    # --- Negation ---
+    if "not" in condition:
+        sub = condition["not"]
+        if not isinstance(sub, dict):
+            return True
+        return not _eval_condition(state, trigger, sub)
+
+    # --- Original flat keys ---
+
     if (expected := condition.get("controller")) is not None and expected != trigger.controller:
         return False
     if (expected := condition.get("source_uid")) is not None and expected != trigger.source_uid:
@@ -63,6 +94,30 @@ def _trigger_condition_matches(state: GameState, trigger: PendingTrigger) -> boo
     if (expected := condition.get("source_card_id")) is not None and expected != trigger.source_card_id:
         return False
     if (expected := condition.get("target_uid")) is not None and expected != trigger.trigger_data.get("target_uid"):
+        return False
+
+    # --- Zone-change conditions ---
+    if (expected := condition.get("from_zone")) is not None:
+        actual_from = trigger.trigger_data.get("from_zone")
+        if actual_from is None or str(actual_from) != str(expected):
+            return False
+    if (expected := condition.get("to_zone")) is not None:
+        actual_to = trigger.trigger_data.get("to_zone")
+        if actual_to is None or str(actual_to) != str(expected):
+            return False
+
+    # --- Turn counter conditions ---
+    turn_num = state.turn_info.turn_number
+    if (expected := condition.get("min_turn")) is not None and turn_num < int(expected):
+        return False
+    if (expected := condition.get("max_turn")) is not None and turn_num > int(expected):
+        return False
+
+    # --- Player shield count conditions ---
+    controller_shield_count = state.players[trigger.controller].shield_count
+    if (expected := condition.get("shield_count_min")) is not None and controller_shield_count < int(expected):
+        return False
+    if (expected := condition.get("shield_count_max")) is not None and controller_shield_count > int(expected):
         return False
 
     # Optional source/target creature checks.
