@@ -5,14 +5,16 @@ engine/action_executor.py — apply one Action to a copied GameState.
 from __future__ import annotations
 
 from core.actions import Action, actions_equal
-from core.enums import ActionType, Phase
-from core.state import AttackContext, GameState
+from core.enums import ActionType, EffectType, Phase
+from core.state import AttackContext, GameState, PendingTrigger
+from engine.trigger_resolver import resolve_pending_triggers
 from engine.action_generator import get_legal_actions
 from engine.battle_resolver import resolve_battle
 from engine.phase_controller import advance_phase
 from engine.sba_checker import check_state_based_actions
 from engine.shield_resolver import mark_direct_attack_if_applicable, resolve_shield_break_choice
 from engine.zone_mover import (
+    combine_king_cells,
     cross_gear_to_creature,
     fortify_shield_with_castle,
     move_hand_to_battle,
@@ -71,8 +73,25 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
     elif action_type == ActionType.CAST_SPELL:
         _require_card_uid(action)
         tap_mana_for_payment(s, action.player, action.mana_used)
+        # Look up the spell card definition before moving it to graveyard
+        hand_card = s.players[action.player].find_in_hand(action.card_uid)
+        spell_def = hand_card.definition if hand_card else None
         move_hand_to_graveyard(s, action.player, action.card_uid, reason="cast")
         s.record_action(action_type, action.player, action.card_id)
+        # Queue and resolve spell effects (rules 600-608)
+        if spell_def is not None:
+            spell_effects = [e for e in spell_def.effects
+                             if e.effect_type == EffectType.SPELL]
+            for effect in spell_effects:
+                trigger = PendingTrigger(
+                    effect=effect,
+                    source_uid=action.card_uid,
+                    source_card_id=action.card_id,
+                    controller=action.player,
+                )
+                s.effect_stack.add_trigger(trigger)
+            if s.effect_stack.pending_triggers:
+                s = resolve_pending_triggers(s)
 
     elif action_type in (
         ActionType.GENERATE_CROSS_GEAR,
@@ -100,6 +119,18 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
         tap_mana_for_payment(s, action.player, action.mana_used)
         fortify_shield_with_castle(s, action.player, action.card_uid, action.target_uid)
         s.record_action(action_type, action.player, action.card_id, action.target_uid)
+
+    elif action_type == ActionType.COMBINE_KING_CREATURE:
+        if action.card_id is None:
+            raise ValueError("COMBINE_KING_CREATURE requires card_id")
+        if db is None:
+            raise ValueError("COMBINE_KING_CREATURE requires db")
+        king_defn = db.require(action.card_id)
+        tap_mana_for_payment(s, action.player, action.mana_used)
+        creature = combine_king_cells(
+            s, action.player, king_defn, list(action.selected_uids)
+        )
+        s.record_action(action_type, action.player, action.card_id, creature.uid)
 
     elif action_type == ActionType.USE_G_ZERO:
         _require_card_uid(action)
