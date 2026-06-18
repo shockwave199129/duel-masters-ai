@@ -190,6 +190,10 @@ class ActionType(Enum):
     FORTIFY_CASTLE      = "fortify_castle"      # rule 304.1 / 701.19
     DEPLOY_FIELD        = "deploy_field"        # rule 308.1 / 701.27
     EXECUTE_TAMASEED    = "execute_tamaseed"    # rule 204.2
+    COMBINE_KING_CREATURE = "combine_king_creature"  # rule 814.1c
+
+    # ── Activated abilities (rule 110.3c) ────────────────────────────────────
+    ACTIVATE_ABILITY    = "activate_ability"    # player activates by paying cost
 
     # ── Mana charge step (rule 503) ───────────────────────────────────────────
     CHARGE_MANA         = "charge_mana"         # place 1 card from hand to mana zone
@@ -296,6 +300,16 @@ class EffectAction(Enum):
     REMOVE_SEAL         = "remove_seal"         # rule 701.23
     GACHINKO_JUDGE      = "gachinko_judge"      # rule 701.21
     HYPERIZE            = "hyperize"            # rule 816
+    # ── Psychic / Dragheart flip mechanics (rules 805–808) ────────────────────
+    AWAKEN              = "awaken"              # rule 805.1a — flip to awakened face
+    AWAKEN_LINK         = "awaken_link"         # rule 805.1c — link multiple cells
+    DRAGSOLVE           = "dragsolve"           # rule 807.1a — Weapon/Fortress → Creature
+    LINK_RELEASE        = "link_release"        # rule 806.1b — Super → cells + one to hyper
+    DRAGON_EVASION      = "dragon_evasion"      # rule 807.1b — replacement, flip to lower face
+    DRAGON_SOUL_EVASION = "dragon_soul_evasion" # rule 808.1b — replacement, choose cell to hyper
+    PSYCHIC_RELEASE     = "psychic_release"     # rule 805.1b — replacement, flip to lower face
+    COMBINE             = "combine"             # rule 814.1 — King Cell combine
+    EXTRA_EX_LIFE       = "extra_ex_life"       # Volzeos-style extra EX Life on combine
     NONE                = "none"
 
 
@@ -328,6 +342,10 @@ class GlobalEffectType(Enum):
 
     # ── Keyword grants ────────────────────────────────────────────────────────
     GRANT_KEYWORD_ALL            = "grant_keyword_all"             # all creatures of type X gain Y
+
+    # ── Per-card static ability effects ─────────────────────────────────────────
+    PER_CARD_POWER_MOD           = "per_card_power_mod"           # e.g. "other Fire creatures get +1000"
+    PER_CARD_KEYWORD_GRANT       = "per_card_keyword_grant"       # e.g. "your creatures gain blocker"
 
     # ── Other ─────────────────────────────────────────────────────────────────
     EXTRA_SHIELD_BREAK           = "extra_shield_break"

@@ -94,6 +94,7 @@ def move_hand_to_battle(
         has_summoning_sickness=True,
     )
     p_state.battle_zone.append(creature)
+    creature.apply_static_effects(state)
     return creature
 
 
@@ -149,8 +150,8 @@ def move_battle_to_hyperspatial(
     if creature is None:
         raise ValueError(f"Battle-zone card {creature_uid} not found")
 
+    creature.remove_static_effects(state)
     state.players[player].battle_zone.remove(creature)
-    state.global_effects.remove_by_source(creature.uid)
 
     # Reset in-play state before returning to hyperspatial
     creature.is_tapped = False
@@ -221,8 +222,8 @@ def move_battle_to_graveyard(
             died_on_turn=state.turn_number,
         )
 
+    creature.remove_static_effects(state)
     state.players[player].battle_zone.remove(creature)
-    state.global_effects.remove_by_source(creature.uid)
     graveyard_card = GraveyardCard(
         definition=creature.definition,
         uid=creature.uid,
@@ -272,8 +273,8 @@ def move_evolution_whole_stack_to_graveyard(
         p_state.graveyard.insert(0, graveyard_card)
 
     # Now remove the creature from battle zone and move top card to graveyard
+    creature.remove_static_effects(state)
     p_state.battle_zone.remove(creature)
-    state.global_effects.remove_by_source(creature.uid)
 
     # Top card goes to graveyard as a creature (will fire creature-leave triggers)
     graveyard_card = GraveyardCard(

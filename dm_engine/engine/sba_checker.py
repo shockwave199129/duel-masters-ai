@@ -20,10 +20,11 @@ Loops until no SBA fires (rule 703.3: repeat if any SBA triggered).
 from __future__ import annotations
 
 from core.enums import (
-    GameResult, CardType, CardSubtype, Phase
+    GameResult, CardType, CardSubtype, Phase, GlobalEffectType
 )
 from core.state import GameState
-from core.zones import Creature, GraveyardCard
+from core.zones import Creature, GraveyardCard, HandCard, HyperspatialCard
+from engine.zone_mover import move_battle_to_hyperspatial, should_apply_psychic_release, should_apply_dragon_evasion, creature_to_hyperspatial_card
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,9 +48,57 @@ def _check_once(state: GameState) -> tuple[GameState, bool]:
     Run one simultaneous SBA check. Returns (new_state, any_fired).
     """
     events = _collect_sba_events(state)
-    if not _has_sba_events(events):
-        return state.copy(), False
-    return _apply_sba_events(state, events), True
+    
+    # Apply collected events first
+    s = _apply_sba_events(state, events)
+    any_fired = _has_sba_events(events)
+    
+    # Then check evolution-specific SBAs (rule 703.4h, 815.1a)
+    # These must be checked after other removals to properly handle cascading effects
+    if _sba_evolution_reconstruction(s):
+        any_fired = True
+    
+    if _sba_smax_uniqueness(s):
+        any_fired = True
+
+    # Re-evaluate static effects for all creatures in battle zones.
+    # Cascading SBA changes (e.g. a creature died, removing its aura) may cause
+    # other creatures to gain/lose power or keywords, potentially triggering
+    # further SBAs on the next loop iteration.
+    _reevaluate_all_static_effects(s)
+
+    return s, any_fired
+
+
+def _reevaluate_all_static_effects(state: GameState) -> None:
+    """
+    Re-apply static effects from all creatures currently in battle zones.
+
+    After SBA events destroy creatures, their static auras must be removed
+    and remaining creatures' static effects must be re-applied to reflect
+    the new board state. This handles cascading board-wide effect changes.
+
+    This works by:
+      1. Clearing all per-card static global effects (PER_CARD_POWER_MOD,
+         PER_CARD_KEYWORD_GRANT) from the registry.
+      2. Clearing each creature's static_effects tracking list.
+      3. Re-applying static effects from every creature still in battle zones.
+    """
+    # Remove all per-card sourced global effects
+    per_card_types = {
+        GlobalEffectType.PER_CARD_POWER_MOD,
+        GlobalEffectType.PER_CARD_KEYWORD_GRANT,
+    }
+    state.global_effects.effects = [
+        e for e in state.global_effects.effects
+        if e.effect_type not in per_card_types
+    ]
+
+    # Clear all creatures' static effect tracking and re-apply
+    for player_idx in range(2):
+        for creature in state.players[player_idx].battle_zone:
+            creature.static_effects.clear()
+            creature.apply_static_effects(state)
 
 
 def _collect_sba_events(state: GameState) -> dict:
@@ -168,15 +217,62 @@ def _apply_sba_events(state: GameState, events: dict) -> GameState:
         if creature is None:
             continue
         s.players[player_idx].battle_zone.remove(creature)
-        s.players[player_idx].graveyard.insert(
-            0,
-            GraveyardCard(
-                definition=creature.definition,
-                uid=creature.uid,
-                died_from=reason,
-                died_on_turn=s.turn_number,
+
+        if reason == "sba_standalone_weapon":
+            # Rule 807.4b: Dragheart Weapon must return to Hyperspatial, not graveyard.
+            # Reset face/state and send to owner's hyperspatial zone.
+            s.global_effects.remove_by_source(creature.uid)
+            creature.face = 0
+            creature.is_tapped = False
+            creature.power_modifiers.clear()
+            creature.temp_flags.clear()
+            owner = creature.owner
+            s.players[owner].hyperspatial_zone.append(creature_to_hyperspatial_card(creature))
+        elif reason == "sba_standalone_cell":
+            if creature.definition.is_king_cell():
+                # Rule 814.1: King Cell alone in BZ → graveyard (not hyperspatial).
+                s.players[player_idx].graveyard.insert(
+                    0,
+                    GraveyardCard(
+                        definition=creature.definition,
+                        uid=creature.uid,
+                        died_from=reason,
+                        died_on_turn=s.turn_number,
+                    ),
+                )
+            else:
+                # Rule 806.1a: Psychic Cell → graveyard first, then immediately to Hyperspatial.
+                s.players[player_idx].graveyard.insert(
+                    0,
+                    GraveyardCard(
+                        definition=creature.definition,
+                        uid=creature.uid,
+                        died_from=reason,
+                        died_on_turn=s.turn_number,
+                    )
+                )
+                # Immediately move out of graveyard and into owner's hyperspatial zone
+                gy_card = s.players[player_idx].graveyard[0]
+                if gy_card.uid == creature.uid:
+                    s.players[player_idx].graveyard.pop(0)
+                creature.face = 0
+                creature.is_tapped = False
+                creature.power_modifiers.clear()
+                creature.temp_flags.clear()
+                creature.is_psychic_cell = False
+                creature.linked_cells.clear()
+                owner = creature.owner
+                s.players[owner].hyperspatial_zone.append(creature_to_hyperspatial_card(creature))
+        else:
+            s.players[player_idx].graveyard.insert(
+                0,
+                GraveyardCard(
+                    definition=creature.definition,
+                    uid=creature.uid,
+                    died_from=reason,
+                    died_on_turn=s.turn_number,
+                )
             )
-        )
         moved_to_graveyard.add(key)
 
     for player_idx, target_uid in events["seal_removal"]:
@@ -326,6 +422,119 @@ def _sba_battle_loser(state: GameState) -> bool:
             _destroy_creature(state, player_idx, creature, "battle")
             fired = True
 
+    return fired
+
+
+def _sba_evolution_reconstruction(state: GameState) -> bool:
+    """
+    Rule 703.4h: When only the top card of an Evolution Creature leaves the
+    Battle Zone, the underlying cards remain and reconstruct.
+    
+    Rule 801.4a-d: Reconstruction loop:
+      1. If the next card in the stack can exist standalone, it becomes the new top
+      2. If not, it goes to graveyard and we check the next one
+      3. Repeat until a valid card is the new top or stack is exhausted
+      4. Reconstructed creature does not re-enter; inherits effects; keeps orientation
+    
+    This SBA is triggered when a creature has the "_pending_reconstruction" flag
+    set by remove_top_evolution_card_and_reconstruct in zone_mover.py.
+    """
+    # Invalid card types that cannot exist standalone in the Battle Zone
+    INVALID_STANDALONE = {
+        CardType.SPELL,
+        CardType.CASTLE,
+        CardType.CORE,
+        CardType.CELL,
+        CardType.WEAPON,
+    }
+
+    fired = False
+    for player_idx in range(2):
+        creatures_needing_reconstruction = [
+            c for c in state.players[player_idx].battle_zone
+            if c.temp_flags.get("_pending_reconstruction", False)
+        ]
+
+        for creature in creatures_needing_reconstruction:
+            creature.clear_flag("_pending_reconstruction")
+
+            # Rule 801.4b: Loop through underlying cards
+            while creature.is_evolution_creature():
+                under_entry = creature.peek_under_card()
+                if under_entry is None:
+                    # No more cards underneath — remove entire creature
+                    state.players[player_idx].battle_zone.remove(creature)
+                    state.global_effects.remove_by_source(creature.uid)
+                    fired = True
+                    break
+
+                # Rule 801.4a: Check if this card can exist standalone
+                if under_entry.definition.card_type in INVALID_STANDALONE:
+                    # Cannot exist standalone → move to graveyard and continue loop
+                    popped = creature.pop_from_evolution_stack()
+                    if popped:
+                        state.players[player_idx].graveyard.insert(
+                            0,
+                            GraveyardCard(
+                                definition=popped.definition,
+                                uid=popped.uid,
+                                died_from="sba_evolution_reconstruct_invalid",
+                                died_on_turn=state.turn_number,
+                            )
+                        )
+                    fired = True
+                    continue  # Check next card in stack
+
+                # Rule 801.4c-d: Valid card — promote it to be the new top
+                # The creature stays the same (same uid), just updates the definition
+                popped = creature.pop_from_evolution_stack()
+                if popped:
+                    # Rule 801.4c: reconstructed card inherits effects and does not re-enter
+                    # Rule 801.4d: orientation is inherited from the creature's current state
+                    creature.definition = popped.definition
+                    # Note: We keep creature.uid unchanged (same creature, rule 801.2)
+                    # Note: We keep creature.is_tapped as is (rule 801.4d)
+                    # Note: We keep creature.power_modifiers as is (rule 801.4c)
+                    fired = True
+
+                # After reconstruction, stop and let SBA re-check (rule 703.3)
+                break
+
+    return fired
+
+
+def _sba_smax_uniqueness(state: GameState) -> bool:
+    """
+    Rule 815.1a: Only 1 S-MAX Evolution Creature can exist in the Battle Zone
+    per player. If there are 2 or more S-MAX creatures, keep 1 and return the
+    others to the owner's hand.
+    
+    This is a static ability (rule 815.1a), but we check it here as an SBA
+    to ensure it runs after each state change.
+    """
+    fired = False
+    
+    for player_idx in range(2):
+        smax_creatures = [
+            c for c in state.players[player_idx].battle_zone
+            if c.definition.card_subtype == CardSubtype.STAR_MAX
+        ]
+        
+        if len(smax_creatures) > 1:
+            # Keep the most recently entered; return others to hand
+            # (In practice, the first one entered should be kept, but we use a simple heuristic)
+            for idx, creature in enumerate(smax_creatures[1:], start=1):
+                # Return this creature to the owner's hand
+                state.players[player_idx].battle_zone.remove(creature)
+                state.global_effects.remove_by_source(creature.uid)
+                
+                hand_card = HandCard(
+                    definition=creature.definition,
+                    uid=creature.uid
+                )
+                state.players[player_idx].hand.append(hand_card)
+                fired = True
+    
     return fired
 
 
@@ -548,19 +757,34 @@ def _destroy_creature(
     reason: str,
 ) -> None:
     """
-    Move a creature from the battle zone to the graveyard.
-    Also removes any global effects that were sourced from that creature.
+    Move a creature from the battle zone to its destination zone.
+
+    - Normal creatures → graveyard.
+    - Psychic / Dragheart creatures → owner's Hyperspatial Zone (rules 805.4b, 807.4b).
+      Movement to any non-Battle Zone zone cannot be prevented for these card types.
 
     Does NOT trigger "when destroyed" effects — those are queued by
     trigger_resolver.py after the destroy action is applied.
     """
     p = state.players[player_idx]
 
-    if creature in p.battle_zone:
-        p.battle_zone.remove(creature)
+    if creature not in p.battle_zone:
+        return
 
-    # Remove any global effects this creature was providing
-    state.global_effects.remove_by_source(creature.uid)
+    # Rules 805.1b / 807.1b — Release / Dragon Evasion fires before the hyperspatial redirect.
+    # If applicable, the creature stays in BZ (flipped to lower face by the caller).
+    if should_apply_psychic_release(creature) or should_apply_dragon_evasion(creature):
+        creature.temp_flags["_replacement_already_applied"] = True
+        return
+
+    _HYPERSPATIAL_SUBTYPES = (CardSubtype.PSYCHIC, CardSubtype.PSYCHIC_SUPER, CardSubtype.DRAGHEART)
+    if creature.definition.card_subtype in _HYPERSPATIAL_SUBTYPES:
+        # Rules 805.4b / 807.4b: return to Hyperspatial instead of graveyard
+        move_battle_to_hyperspatial(state, player_idx, creature.uid, reason=reason)
+        return
+
+    p.battle_zone.remove(creature)
+    creature.remove_static_effects(state)
 
     # Move to graveyard (newest first)
     p.graveyard.insert(

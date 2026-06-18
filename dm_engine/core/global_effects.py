@@ -76,6 +76,18 @@ class GlobalEffect:
     grant_to_civ:        Optional[str] = None
     grant_to_controller: Optional[int] = None
 
+    # ── PER_CARD_POWER_MOD ──────────────────────────────────────────────────────
+    # "While this creature is in the battle zone, your other Fire creatures get +1000 power"
+    # Uses power_mod_amount + power_mod_target from ALL_CREATURES_POWER_MOD above,
+    # plus filtering by civilization/race.
+    per_card_filter_civ:        Optional[str] = None   # civilization filter (e.g. "Fire")
+    per_card_filter_race:       Optional[str] = None   # race filter (e.g. "Dragon")
+    per_card_filter_self:       bool = True            # if True, excludes the source creature
+
+    # ── PER_CARD_KEYWORD_GRANT ─────────────────────────────────────────────────
+    # "While this creature is in the battle zone, your creatures gain Blocker"
+    # Uses grant_keyword + grant_to_controller from GRANT_KEYWORD_ALL above.
+
     # ── LOCK_ALL_SPELLS ───────────────────────────────────────────────────────
     # No extra params
 

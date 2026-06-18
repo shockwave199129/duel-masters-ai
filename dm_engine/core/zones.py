@@ -326,6 +326,9 @@ class Creature:
     # King Cell combine tracking (rule 814)
     is_king_cell:        bool = False        # True when part of a combined King Creature
 
+    # Static ability tracking — which CardEffect refs are currently applied
+    static_effects:      list = field(default_factory=list)  # list[CardEffect] currently active
+
     # Controller — usually the owner but can change with some effects
     controller:          int = 0   # player index (0 or 1)
     owner:               int = 0   # who owns the card (for "return to owner's hand")
@@ -566,6 +569,88 @@ class Creature:
             return None
         
         return (under_entry, under_entry.neo_evolution_placed)
+
+    # ── Static ability application ───────────────────────────────────────────────
+
+    def apply_static_effects(self, game_state) -> None:
+        """
+        Read this creature's static effects from its CardDefinition and apply them
+        to the game state. Called when the creature enters the battle zone.
+
+        Handles:
+          - Power modifiers to other creatures (via GlobalEffectRegistry)
+          - Keyword grants to other creatures (via GlobalEffectRegistry)
+          - Registration of per-card global effects
+        """
+        from core.global_effects import GlobalEffect, GlobalEffectType
+
+        effects = self.definition.get_static_effects()
+        for card_effect in effects:
+            self.static_effects.append(card_effect)
+
+            action = card_effect.effect_action
+            target = card_effect.effect_target
+            value = card_effect.effect_value
+
+            if action == "power_modify":
+                # e.g. "your other Fire creatures get +1000 power"
+                amount = value.get("amount", 0)
+                filter_civ = target.get("civilization")
+                filter_race = target.get("race")
+                target_scope = target.get("scope", "own")  # "own" | "opponent" | "all"
+                exclude_self = target.get("exclude_self", True)
+
+                eff = GlobalEffect(
+                    effect_type=GlobalEffectType.PER_CARD_POWER_MOD,
+                    applied_by_uid=self.uid,
+                    applied_by_card=self.id,
+                    controller=self.controller,
+                    target_player=None if target_scope == "all" else self.controller,
+                    duration="while_in_play",
+                    power_mod_amount=amount,
+                    power_mod_target=target_scope,
+                    per_card_filter_civ=filter_civ,
+                    per_card_filter_race=filter_race,
+                    per_card_filter_self=exclude_self,
+                )
+                game_state.global_effects.add(eff)
+
+            elif action == "give_keyword":
+                # e.g. "your creatures gain Blocker"
+                keyword = value.get("keyword")
+                if keyword is None:
+                    keyword = value.get("granted_keyword")
+                if keyword is None:
+                    continue
+                filter_civ = target.get("civilization")
+                filter_race = target.get("race")
+                target_scope = target.get("scope", "own")
+
+                eff = GlobalEffect(
+                    effect_type=GlobalEffectType.PER_CARD_KEYWORD_GRANT,
+                    applied_by_uid=self.uid,
+                    applied_by_card=self.id,
+                    controller=self.controller,
+                    target_player=None if target_scope == "all" else self.controller,
+                    duration="while_in_play",
+                    grant_keyword=keyword,
+                    grant_to_civ=filter_civ,
+                    grant_to_race=filter_race,
+                    grant_to_controller=self.controller if target_scope == "own" else None,
+                )
+                game_state.global_effects.add(eff)
+
+    def remove_static_effects(self, game_state) -> None:
+        """
+        Remove all static effects that this creature has applied to the game state.
+        Called when the creature leaves the battle zone.
+
+        Uses GlobalEffectRegistry.remove_by_source() to cleanly reverse all
+        effects sourced from this creature's uid.
+        """
+        self.static_effects.clear()
+        game_state.global_effects.remove_by_source(self.uid)
+
 
     def __repr__(self) -> str:
         state = []
