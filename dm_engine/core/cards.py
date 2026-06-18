@@ -54,6 +54,9 @@ class CardEffect:
     def is_static(self) -> bool:
         return self.effect_type == EffectType.STATIC
 
+    def is_activated(self) -> bool:
+        return self.effect_type == EffectType.ACTIVATED
+
     def is_replacement_effect(self) -> bool:
         return self.effect_type == EffectType.REPLACEMENT
 
@@ -92,6 +95,23 @@ class CardDefinition:
 
     is_multiface:  bool              # twin pact or similar
 
+    # Double-faced cards (Psychic, Dragheart, Forbidden, Zerom, etc.)
+    # Store the ID of the other face; resolved to full CardDefinition at load time (rule 805.1, 807.1)
+    other_face_id: Optional[int] = None
+
+    # King Cell combine (rule 814) — from card_relations
+    king_combine_target_slug: Optional[str] = None       # cell → combined creature slug
+    king_combine_required_slugs: frozenset[str] = frozenset()  # creature → required cell slugs
+
+    # God / Psychic Super links (rule 804 / 806) — from card_relations after link pass
+    god_link_slugs: frozenset[str] = frozenset()
+    god_link_group: Optional[str] = None
+    god_link_position: Optional[str] = None   # left | center | right (card's own slot)
+    god_link_layout_size: Optional[int] = None  # 2 | 3 | 4 | 6 for the god set
+    god_glink_slots: tuple[tuple[str, str], ...] = ()  # (side, partner_slug)
+    god_glink_open_sides: frozenset[str] = frozenset()
+    psychic_super_cell_slugs: frozenset[str] = frozenset()
+
     def is_creature(self) -> bool:
         return self.card_type == CardType.CREATURE
 
@@ -105,6 +125,20 @@ class CardDefinition:
             CardSubtype.SUPER_EVOLUTION,
             CardSubtype.STAR_MAX,
         )
+
+    def is_king_cell(self) -> bool:
+        """Rule 814.1: King Cell — cannot be executed alone."""
+        return self.card_type == CardType.CELL and self.king_combine_target_slug is not None
+
+    def is_king_creature(self) -> bool:
+        """King Creature summoned only by combining King Cells (rule 814.1)."""
+        return bool(self.king_combine_required_slugs)
+
+    def effective_cost(self) -> int:
+        """Rule 814.1a: King Cell cost is 0 when referenced."""
+        if self.is_king_cell():
+            return 0
+        return self.cost
 
     def has_keyword(self, kw: Keyword) -> bool:
         return kw in self.keywords
@@ -140,6 +174,9 @@ class CardDefinition:
     def get_static_effects(self) -> list[CardEffect]:
         return [e for e in self.effects if e.is_static()]
 
+    def get_activated_effects(self) -> list[CardEffect]:
+        return [e for e in self.effects if e.is_activated()]
+
     def get_cost_modifiers(self) -> list[CardEffect]:
         return [e for e in self.effects if e.effect_type == EffectType.COST_MOD]
 
@@ -173,6 +210,11 @@ class DeckDefinition:
     # card_id → count (e.g. {1: 4, 2: 3, 5: 4, ...})
     card_counts: dict[int, int]
 
+    # Psychic/Dragheart cards placed in Hyperspatial Zone at game start (rule 805.4, 807.4)
+    # card_id → count (e.g. {100: 1, 101: 2, ...})
+    # Max 8 total cards (rule 407.1 / MAX_HYPERSPATIAL)
+    hyperspatial_counts: dict[int, int] = field(default_factory=dict)
+
     # Resolved definitions (populated by CardDatabase.resolve_deck)
     card_definitions: dict[int, CardDefinition] = field(default_factory=dict)
 
@@ -180,13 +222,33 @@ class DeckDefinition:
         return sum(self.card_counts.values())
 
     def is_valid(self) -> bool:
-        """Basic deck legality check."""
+        """Basic deck legality check (rule 100, rule 407.1)."""
+        # Main deck must be exactly 40 cards (rule 100.1)
         if self.total_cards() != MAX_DECK_SIZE:
             return False
         if any(count <= 0 for count in self.card_counts.values()):
             return False
         if any(count > MAX_COPIES_PER_CARD for count in self.card_counts.values()):
             return False
+
+        # Hyperspatial zone max 8 cards (rule 407.1 / MAX_HYPERSPATIAL)
+        hyperspatial_total = sum(self.hyperspatial_counts.values())
+        if hyperspatial_total > 8:
+            return False
+        if any(count <= 0 for count in self.hyperspatial_counts.values()):
+            return False
+        if any(count > MAX_COPIES_PER_CARD for count in self.hyperspatial_counts.values()):
+            return False
+
+        # Hyperspatial cards must be Psychic or Dragheart (rule 407)
+        from .enums import CardSubtype
+        for card_id in self.hyperspatial_counts.keys():
+            defn = self.card_definitions.get(card_id)
+            if defn is not None:
+                allowed_subtypes = (CardSubtype.PSYCHIC, CardSubtype.PSYCHIC_SUPER, CardSubtype.DRAGHEART)
+                if defn.card_subtype not in allowed_subtypes:
+                    return False
+
         return True
 
     def all_card_ids(self) -> list[int]:

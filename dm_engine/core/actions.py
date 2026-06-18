@@ -297,6 +297,43 @@ def cast_spell(
     )
 
 
+# ── Activated Ability (rule 110.3c) ──────────────────────────────────────────
+
+def activate_ability(
+    player:       int,
+    source_uid:   str,
+    source_card_id: int,
+    ability_index: int,
+    mana_used:    list[ManaUsage],
+    tap_source:   bool = False,
+    discard_uid:  Optional[str] = None,
+) -> Action:
+    """
+    Rule 110.3c: Activate an ability on a card in play by paying its cost.
+    Costs may include: tapping mana cards, tapping the source card, and/or
+    discarding a card from hand.
+
+    source_uid:     uid of the card whose ability is being activated
+    source_card_id: card_id of the source card
+    ability_index:  which ■ ability on the card (0-based)
+    mana_used:      tuple of ManaUsage for mana cost payment
+    tap_source:     True if the source card must tap (e.g. creature abilities)
+    discard_uid:    uid of card from hand to discard (if discard cost)
+    """
+    return Action(
+        player=player,
+        action_type=ActionType.ACTIVATE_ABILITY,
+        card_uid=source_uid,
+        card_id=source_card_id,
+        mana_used=tuple(mana_used),
+        extra=(
+            ("ability_index", ability_index),
+            ("tap_source", tap_source),
+            ("discard_uid", discard_uid),
+        ),
+    )
+
+
 # ── Main Step — Generate Cross Gear (rule 303, 701.16) ────────────────────────
 
 def generate_cross_gear(
@@ -398,6 +435,27 @@ def execute_tamaseed(
         action_type=ActionType.EXECUTE_TAMASEED,
         card_uid=card_uid,
         card_id=card_id,
+        mana_used=tuple(mana_used),
+    )
+
+
+# ── Main Step — Combine King Cells (rule 814.1c) ──────────────────────────────
+
+def combine_king_creature(
+    player:        int,
+    king_card_id:  int,
+    cell_uids:     list[str],
+    mana_used:     list[ManaUsage],
+) -> Action:
+    """
+    Rule 814.1c: Pay the combined King Creature's cost using mana (including
+    King Cells in the mana zone), then combine cells from hand/mana into BZ.
+    """
+    return Action(
+        player=player,
+        action_type=ActionType.COMBINE_KING_CREATURE,
+        card_id=king_card_id,
+        selected_uids=tuple(cell_uids),
         mana_used=tuple(mana_used),
     )
 
@@ -909,6 +967,7 @@ ACTION_TYPE_INDEX: dict[ActionType, int] = {
     ActionType.SELECT_ATTACK_ORDER:   23,
     ActionType.SELECT_EVOLUTION_BASE: 24,
     ActionType.PASS:                  25,
+    ActionType.COMBINE_KING_CREATURE: 26,
 }
 
 NUM_ACTION_TYPES = len(ACTION_TYPE_INDEX)

@@ -57,6 +57,7 @@ from core.actions import (
     summon_creature, cast_spell, generate_cross_gear,
     cross_gear, fortify_castle, deploy_field, execute_tamaseed,
     combine_king_creature,
+    activate_ability,
     pass_main,
     attack_player, attack_creature, pass_attack,
     declare_blocker, declare_guardman, pass_block,
@@ -295,6 +296,9 @@ def _generate_main_actions(state: GameState, db=None) -> list[Action]:
     if db is not None:
         actions.extend(_king_combine_actions(player, state, db))
 
+    # ── Activated abilities (rule 110.3c) ──────────────────────────────────
+    actions.extend(_generate_activated_ability_actions(player, state, db))
+
     # ── Pass (end main step) ───────────────────────────────────────────────
     actions.append(pass_main(player))
     return actions
@@ -459,6 +463,95 @@ def _actions_for_hand_card(
         )
         for combo in combos:
             actions.append(execute_tamaseed(player, card_uid, defn.id, combo))
+
+    return actions
+
+
+def _generate_activated_ability_actions(
+    player: int,
+    state: GameState,
+    db=None,
+) -> list[Action]:
+    """
+    Rule 110.3c: generate ACTIVATE_ABILITY actions for every card in play
+    that has an activated ability and whose cost can be paid right now.
+
+    Scans the player's battle zone, mana zone, and shield zone. For each
+    card with activated effects, checks:
+      - Is the source card untapped (if tap is required)?
+      - Can the mana cost be paid with current untapped mana?
+      - Is a discard available (if discard is required)?
+
+    Returns a list of activate_ability Action objects (may be empty).
+    """
+    actions: list[Action] = []
+    p_state = state.players[player]
+
+    # ── Collect all zones that can hold activatable cards ─────────────────
+    zones: list = []
+    zones.extend(p_state.battle_zone)   # creatures, cross gears, etc.
+    zones.extend(p_state.mana_zone)     # mana cards with activated abilities
+    zones.extend(p_state.shield_zone)   # shield cards with activated abilities
+
+    for card in zones:
+        defn = card.definition
+        activated = defn.get_activated_effects()
+        if not activated:
+            continue
+
+        # Determine if the source card needs to be untapped
+        needs_untapped = card.is_tapped if hasattr(card, 'is_tapped') else False
+        if needs_untapped:
+            continue  # can't activate if already tapped
+
+        # Check if card is ignored (sealed, rule 116.2)
+        if hasattr(card, 'is_ignored') and card.is_ignored:
+            continue
+
+        for i, effect in enumerate(activated):
+            # ── Determine cost from effect data ──────────────────────────
+            cost_info = effect.effect_value if effect.effect_value else {}
+            mana_cost = cost_info.get("mana_cost", 0)
+            tap_cost = cost_info.get("tap_source", False)
+            needs_discard = cost_info.get("discard", False)
+
+            # ── Check mana affordability ─────────────────────────────────
+            if mana_cost > 0:
+                civs = defn.civilizations
+                combos = _get_mana_combinations(
+                    p_state.mana_zone, mana_cost, civs
+                )
+                if not combos:
+                    continue  # can't afford mana cost
+            else:
+                combos = [[]]  # free activation
+
+            # ── Check discard availability ────────────────────────────────
+            if needs_discard and not p_state.hand:
+                continue  # no card to discard
+
+            # ── Generate actions ─────────────────────────────────────────
+            for combo in combos:
+                if needs_discard:
+                    for hand_card in p_state.hand:
+                        actions.append(activate_ability(
+                            player=player,
+                            source_uid=card.uid,
+                            source_card_id=defn.id,
+                            ability_index=i,
+                            mana_used=combo,
+                            tap_source=tap_cost,
+                            discard_uid=hand_card.uid,
+                        ))
+                else:
+                    actions.append(activate_ability(
+                        player=player,
+                        source_uid=card.uid,
+                        source_card_id=defn.id,
+                        ability_index=i,
+                        mana_used=combo,
+                        tap_source=tap_cost,
+                    ))
 
     return actions
 

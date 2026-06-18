@@ -165,6 +165,9 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
             s.attack_context.ninja_strike_card_uid = creature.uid
         s.record_action(action_type, action.player, action.card_id, creature.uid)
 
+    elif action_type == ActionType.ACTIVATE_ABILITY:
+        _execute_activated_ability(s, action)
+
     elif action_type == ActionType.HYPERIZE:
         creature = s.players[action.player].find_creature(action.card_uid or "")
         if creature is None:
@@ -187,6 +190,58 @@ def _is_legal_action(state: GameState, action: Action, db=None) -> bool:
 def _require_card_uid(action: Action) -> None:
     if not action.card_uid:
         raise ValueError(f"{action.action_type.value} requires card_uid")
+
+
+def _execute_activated_ability(state: GameState, action: Action) -> None:
+    """
+    Execute an ACTIVATE_ABILITY action: pay costs, then queue the activated
+    ability's effects as PendingTriggers on the EffectStack for resolution.
+    """
+    extra = dict(action.extra)
+    ability_index = extra.get("ability_index", 0)
+    tap_source = extra.get("tap_source", False)
+    discard_uid = extra.get("discard_uid")
+
+    # ── Pay mana cost ────────────────────────────────────────────────────
+    if action.mana_used:
+        tap_mana_for_payment(state, action.player, action.mana_used)
+
+    # ── Tap source card if required ──────────────────────────────────────
+    if tap_source:
+        source = state.players[action.player].find_creature(action.card_uid or "")
+        if source is None:
+            # Try mana zone / shield zone
+            source = state.players[action.player].find_mana(action.card_uid or "")
+        if source is not None and hasattr(source, 'tap'):
+            source.tap()
+
+    # ── Pay discard cost ─────────────────────────────────────────────────
+    if discard_uid is not None:
+        move_hand_to_graveyard(state, action.player, discard_uid, reason="activated ability cost")
+
+    # ── Queue activated ability effects on the EffectStack ──────────────
+    source_card = state.players[action.player].find_creature(action.card_uid or "")
+    if source_card is None:
+        # Try mana zone
+        source_card = state.players[action.player].find_mana(action.card_uid or "")
+    if source_card is not None:
+        defn = source_card.definition
+        activated_effects = defn.get_activated_effects()
+        if ability_index < len(activated_effects):
+            effect = activated_effects[ability_index]
+            trigger = PendingTrigger(
+                effect=effect,
+                source_uid=action.card_uid or "",
+                source_card_id=action.card_id or 0,
+                controller=action.player,
+            )
+            state.effect_stack.add_trigger(trigger)
+            if state.effect_stack.pending_triggers:
+                resolve_pending_triggers(state)
+
+    state.record_action(
+        action.action_type, action.player, action.card_id, action.card_uid
+    )
 
 
 def _declare_attack(state: GameState, action: Action) -> None:
