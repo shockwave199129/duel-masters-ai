@@ -374,6 +374,13 @@ class Creature:
         if fixed_power is not None:
             return int(fixed_power)
 
+        # ── Global power fix (ALL_CREATURES_POWER_FIX) ────────────────────────────
+        # Same priority as per-card power fix — overrides CDA and standard computation
+        if game_state_ref is not None:
+            global_fix = game_state_ref.global_effects.get_all_creatures_power_fix(self.controller)
+            if global_fix is not None:
+                return global_fix
+
         # ── CDA (Characteristic-Defining Ability) ────────────────────────────────
         cda = self.definition.cda_formula_type
         if cda != CDAFormulaType.NONE:
@@ -390,6 +397,9 @@ class Creature:
                     total += mod.amount * count
                 else:
                     total += mod.amount
+            # Add global power bonus (e.g. "all your creatures get +2000 power")
+            if game_state_ref is not None:
+                total += game_state_ref.global_effects.get_global_power_bonus(self.controller, self.controller)
             return total
 
         # ── Standard power computation ────────────────────────────────────────────
@@ -407,6 +417,8 @@ class Creature:
         # Add per-card global power bonuses (static aura effects)
         if game_state_ref is not None:
             total += game_state_ref.global_effects.get_per_card_power_bonus(self)
+            # Add global power bonus (e.g. "all creatures get +2000 power")
+            total += game_state_ref.global_effects.get_global_power_bonus(self.controller, self.controller)
         return total
 
     def _compute_cda_power(self, game_state_ref=None) -> int:

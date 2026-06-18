@@ -242,7 +242,26 @@ class GlobalEffectRegistry:
             total += eff.power_mod_amount
         return total
 
-    # ── Full state summary (for debugging / logging) ──────────────────────────
+    # ── Power fix ──────────────────────────────────────────────────────────────
+
+    def get_all_creatures_power_fix(self, player: int) -> Optional[int]:
+        """
+        Returns the highest power fix value from ALL_CREATURES_POWER_FIX global
+        effects targeting the given player, or None if no such effect is active.
+
+        Rule 206.3: power fix effects set the creature's power to a specific
+        value, overriding all other power modifications including CDA.
+        When multiple power fix effects apply, the highest wins.
+        """
+        best: Optional[int] = None
+        for eff in self.effects:
+            if eff.effect_type != GlobalEffectType.ALL_CREATURES_POWER_FIX:
+                continue
+            if not eff.affects_player(player):
+                continue
+            if best is None or eff.power_mod_amount > best:
+                best = eff.power_mod_amount
+        return best
 
     def get_per_card_power_bonus(
         self,
