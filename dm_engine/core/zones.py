@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from uuid import uuid4
 
-from .enums import Civilization, Keyword, Zone
+from .enums import Civilization, Keyword, CardSubtype
 from .cards import CardDefinition
 
 
@@ -62,6 +62,48 @@ class HandCard:
 
     def __repr__(self) -> str:
         return f"<Hand:{self.definition.name}[{self.uid}]>"
+
+
+# ── Hyperspatial Card ──────────────────────────────────────────────────────────
+
+@dataclass
+class HyperspatialCard:
+    """
+    A card in the Hyperspatial Zone (Psychic, Psychic Super, Dragheart).
+
+    This can be either:
+    - A Psychic or Psychic Super Creature (face 0 or 1, treated as Creature)
+    - A Dragheart in Weapon or Fortress face (face 0, NOT a creature despite having stats)
+
+    Face-up and visible to both players (rule 407.2).
+
+    Stores the card definition, face, and uid. When summoned, converted to a Creature.
+
+    Rule 805.4 / 807.4: Psychic/Dragheart cards in hyperspatial zone have
+    summoning sickness (has_summoning_sickness=True initially).
+    """
+    definition: CardDefinition
+    face:       int = 0  # 0=lower-cost face, 1=awakened/creature face
+    uid:        str = field(default_factory=_new_uid)
+
+    @property
+    def id(self) -> int:
+        return self.definition.id
+
+    @property
+    def name(self) -> str:
+        return self.definition.name
+
+    @property
+    def cost(self) -> int:
+        return self.definition.cost
+
+    @property
+    def civilizations(self) -> frozenset[Civilization]:
+        return self.definition.civilizations
+
+    def __repr__(self) -> str:
+        return f"<Hyperspatial:{self.definition.name}[face={self.face},uid={self.uid}]>"
 
 
 # ── Mana Card ─────────────────────────────────────────────────────────────────
@@ -182,6 +224,38 @@ class PowerModifier:
         return f"<PowerMod:{sign}{self.amount} [{self.duration}] from:{self.source_uid}>"
 
 
+# ── Evolution Stack Entry ──────────────────────────────────────────────────────
+
+@dataclass
+class EvolutionStackEntry:
+    """
+    A single card in an evolution stack (rule 801).
+    Stores card identity (uid + definition) and context needed for reconstruction.
+
+    When an evolution creature is built:
+      - The top card (newest) is stored in Creature.definition + Creature.uid
+      - Previous cards are pushed into evolution_base as EvolutionStackEntry
+      - Index 0 = card directly underneath, last = bottom of stack
+
+    IMPORTANT (rule 801.2): The Creature object is the same creature, even after evolution.
+    The uid remains the same. Only definition changes at the top.
+
+    For reconstruction (rule 801.4), if the top card leaves:
+      - Check next entry: if it can exist standalone, promote it to top
+      - Apply rule 801.4c: no re-entry, inherit effects, no new summoning sickness
+        (unless under-card was placed via NEO ability same turn — rule 802.3)
+      - Apply rule 801.4d: orientation matches the leaving creature
+    """
+    definition:            CardDefinition
+    uid:                   str  = field(default_factory=_new_uid)
+    owner:                 int  = 0              # usually same as creature owner
+    entered_turn:          int  = 0              # turn this card entered evolution stack
+    neo_evolution_placed:  bool = False          # True if placed via NEO Evolution ability (rule 802.3)
+
+    def __repr__(self) -> str:
+        return f"<EvolutionEntry:{self.definition.name}[{self.uid}]>"
+
+
 # ── Creature (Battle Zone Card) ───────────────────────────────────────────────
 
 @dataclass
@@ -206,9 +280,10 @@ class Creature:
     # Power modifications active on this creature
     power_modifiers:     list[PowerModifier] = field(default_factory=list)
 
-    # Evolution stack — cards underneath this creature
+    # Evolution stack — cards underneath this creature (rule 801)
     # Index 0 = directly underneath, last = bottom of stack
-    evolution_base:      list[CardDefinition] = field(default_factory=list)
+    # Stores EvolutionStackEntry for full card identity + context
+    evolution_stack:     list[EvolutionStackEntry] = field(default_factory=list)
 
     # Attached cards (cross gear, aura effects)
     attached_cards:      list[CardDefinition] = field(default_factory=list)
@@ -239,6 +314,18 @@ class Creature:
     # God linking (rule 804) — component cards of a linked God
     linked_cards:        list = field(default_factory=list)  # list[CardDefinition]
 
+    # Psychic / Dragheart double-face state (rules 805, 807)
+    # face = 0: lower-cost face (default); face = 1: awakened/creature face
+    # Preserved through flips per rule 805.5 / 807 (same creature object, uid unchanged)
+    face:                int = 0
+
+    # Psychic Super / Dragheart Super cell tracking (rules 806, 808)
+    is_psychic_cell:     bool = False        # True when this is part of a linked Super Creature
+    linked_cells:        list["Creature"] = field(default_factory=list)  # component cells for Super Creatures
+
+    # King Cell combine tracking (rule 814)
+    is_king_cell:        bool = False        # True when part of a combined King Creature
+
     # Controller — usually the owner but can change with some effects
     controller:          int = 0   # player index (0 or 1)
     owner:               int = 0   # who owns the card (for "return to owner's hand")
@@ -259,6 +346,13 @@ class Creature:
 
     @property
     def civilizations(self) -> frozenset[Civilization]:
+        # Rule 806.1f / 808.1e: Psychic/Dragheart Cells carry the full Super Creature's civilizations.
+        # When part of a Super Creature, return the civilizations of all constituent cells combined.
+        if self.is_psychic_cell and self.linked_cells:
+            civs = set()
+            for cell in self.linked_cells:
+                civs.update(cell.definition.civilizations)
+            return frozenset(civs)
         return self.definition.civilizations
 
     @property
@@ -271,6 +365,10 @@ class Creature:
         Always call this to get current power. Never cache.
         game_state_ref needed for per-card modifiers (Power Attacker).
         """
+        fixed_power = self.temp_flags.get("_power_fix")
+        if fixed_power is not None:
+            return int(fixed_power)
+
         total = self.base_power
         for mod in self.power_modifiers:
             if mod.is_per_card and game_state_ref is not None:
@@ -296,6 +394,20 @@ class Creature:
             return False
         if self.is_tapped:
             return False
+
+        # Rule 805.6: Awakened Psychic Creatures have no summoning sickness
+        if self.face == 1 and self.definition.card_subtype == CardSubtype.PSYCHIC:
+            # face=1 indicates awakened Psychic; no sickness check needed
+            return True
+
+        # Rule 808.1a: Dragheart Super Creatures have no summoning sickness
+        if (self.definition.card_subtype == CardSubtype.DRAGHEART 
+            and self.linked_cells):
+            # Dragheart Super Creature (has linked cells); no sickness check needed
+            return True
+
+        # Rule 805.6a: Even if awakened Psychic flips back, it has no sickness if in BZ since turn start
+        # This is already handled by checking face=1 above, but keep the standard sickness check as fallback
         if self.has_summoning_sickness and not self.has_keyword(Keyword.SPEED_ATTACKER):
             return False
         return True
@@ -351,6 +463,109 @@ class Creature:
 
     def clear_summoning_sickness(self) -> None:
         self.has_summoning_sickness = False
+
+    # ── Evolution stack helpers (rule 801) ─────────────────────────────────────
+
+    def is_evolution_creature(self) -> bool:
+        """True if this creature has cards stacked underneath it."""
+        return len(self.evolution_stack) > 0
+
+    def get_evolution_base_definitions(self) -> list[CardDefinition]:
+        """
+        Backward-compatibility helper: return all definitions in the evolution stack.
+        Used for rule checks that reference "evolution base card".
+        Rule 200.3a: characteristics of under-cards are ignored during normal gameplay.
+        """
+        return [entry.definition for entry in self.evolution_stack]
+
+    def get_under_card_uids(self) -> list[str]:
+        """Return list of UIDs for all cards in evolution stack (top to bottom)."""
+        return [entry.uid for entry in self.evolution_stack]
+
+    def push_to_evolution_stack(self, entry: EvolutionStackEntry) -> None:
+        """Push a card onto the evolution stack (becomes the new 'directly underneath')."""
+        self.evolution_stack.insert(0, entry)
+
+    def pop_from_evolution_stack(self) -> Optional[EvolutionStackEntry]:
+        """Remove and return the top card from evolution stack, or None if empty."""
+        if self.evolution_stack:
+            return self.evolution_stack.pop(0)
+        return None
+
+    def peek_under_card(self) -> Optional[EvolutionStackEntry]:
+        """Look at the top card in the evolution stack without removing it."""
+        if self.evolution_stack:
+            return self.evolution_stack[0]
+        return None
+
+    def get_all_under_cards(self) -> list[EvolutionStackEntry]:
+        """Return copy of entire evolution stack (for iteration, inspection)."""
+        return list(self.evolution_stack)
+
+    # ── NEO Evolution state helpers (rule 802) ─────────────────────────────────
+
+    def is_neo_evolution_creature(self) -> bool:
+        """
+        Rule 802.2: A NEO Creature is treated as a "NEO Evolution Creature" while it
+        is in the Battle Zone with a card underneath it via the NEO Evolution ability,
+        or while it is attempting to enter the Battle Zone as a NEO Evolution Creature.
+        While in other zones, it is treated as a non-evolution creature.
+        """
+        # Must have the NEO or G-NEO subtype
+        if self.definition.card_subtype not in (CardSubtype.NEO, CardSubtype.G_NEO):
+            return False
+        
+        # Must have an underlying card
+        return self.is_evolution_creature()
+
+    def check_neo_summoning_sickness_recovery(self, current_turn: int) -> bool:
+        """
+        Rule 802.3: If a NEO Creature has a card underneath it, it is treated as a
+        "NEO Evolution Creature" and does not suffer from summoning sickness. However,
+        if the underlying card is removed by some method during the same turn it was
+        played, it is no longer a "NEO Evolution Creature" and cannot attack due to
+        "summoning sickness."
+
+        This helper checks if a NEO creature that lost its underlying card during the
+        same turn it was NEO-evolved should have summoning sickness restored.
+
+        Returns True if summoning sickness should be restored (i.e., the creature was
+        NEO-evolved this turn and now has no underlying card).
+        """
+        # Only applies to NEO creatures
+        if self.definition.card_subtype not in (CardSubtype.NEO, CardSubtype.G_NEO):
+            return False
+        
+        # Must have entered this turn (to check same-turn rule)
+        if self.entered_turn != current_turn:
+            return False
+        
+        # Now has no underlying card
+        if self.is_evolution_creature():
+            return False
+        
+        # Check if there was a NEO-evolution card placed this turn
+        # (This is checked via the temp_flags set when the card was evolved)
+        if self.temp_flags.get("_neo_evolved_this_turn", False):
+            return True
+        
+        return False
+
+    def get_neo_underlying_entry_info(self) -> Optional[tuple[EvolutionStackEntry, bool]]:
+        """
+        Helper to get the current underlying card and whether it was placed via
+        NEO Evolution ability (rule 802.3).
+
+        Rule 802.3: Whether the underlying card was placed via NEO ability matters
+        for determining if summoning sickness applies when it's removed.
+
+        Returns: Tuple of (EvolutionStackEntry, was_placed_via_neo_ability) or None
+        """
+        under_entry = self.peek_under_card()
+        if not under_entry:
+            return None
+        
+        return (under_entry, under_entry.neo_evolution_placed)
 
     def __repr__(self) -> str:
         state = []
