@@ -13,7 +13,7 @@ CardEffect      — one parsed ability row from card_effects table
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Any
-from .enums import Civilization, CardType, CardSubtype, Keyword, EffectType, TriggerEvent, EffectAction
+from .enums import Civilization, CardType, CardSubtype, Keyword, EffectType, TriggerEvent, EffectAction, CDAFormulaType
 
 
 # ── Effect Row ────────────────────────────────────────────────────────────────
@@ -94,6 +94,13 @@ class CardDefinition:
     evolution_source_types: frozenset[CardType]
 
     is_multiface:  bool              # twin pact or similar
+
+    # Characteristic-Defining Ability (CDA) for dynamic power computation
+    cda_formula_type: CDAFormulaType = CDAFormulaType.NONE
+    cda_multiplier: int = 0               # for MULT formulas (e.g. × 1000)
+    cda_fixed_value: int = 0              # for FIXED formula
+    cda_zone: str = ""                    # zone key for per-card counting (e.g. "hand", "mana_zone")
+    cda_filter_civ: Optional[Civilization] = None  # optional civilization filter for counting
 
     # Double-faced cards (Psychic, Dragheart, Forbidden, Zerom, etc.)
     # Store the ID of the other face; resolved to full CardDefinition at load time (rule 805.1, 807.1)

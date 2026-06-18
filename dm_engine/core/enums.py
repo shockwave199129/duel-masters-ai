@@ -243,6 +243,20 @@ class EffectType(Enum):
     SPELL       = "spell"        # rule 110.3a — spell ability (on cast)
 
 
+
+# ── CDA (Characteristic-Defining Ability) Formula Types ──────────────────────
+# Some creatures have abilities that completely replace their base power
+# with a computed value (e.g. "power = cards in hand × 1000").
+
+class CDAFormulaType(Enum):
+    NONE                    = "none"                       # no CDA (default)
+    HAND_COUNT_MULT         = "hand_count_mult"            # power = cards_in_hand × multiplier
+    BATTLE_ZONE_COUNT_MULT  = "battle_zone_count_mult"     # power = creatures_in_battle × multiplier
+    MANA_COUNT_MULT         = "mana_count_mult"            # power = cards_in_mana × multiplier
+    SHIELD_COUNT_MULT       = "shield_count_mult"          # power = shields × multiplier
+    FIXED                   = "fixed"                      # power = fixed value
+
+
 class TriggerEvent(Enum):
     """Maps directly to card_effects.trigger_event in DB."""
     ON_ENTER_BATTLE_ZONE  = "on_enter_battle_zone"

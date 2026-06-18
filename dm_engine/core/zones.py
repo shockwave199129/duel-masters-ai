@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from uuid import uuid4
 
-from .enums import Civilization, Keyword, CardSubtype
+from .enums import Civilization, Keyword, CardSubtype, CDAFormulaType
 from .cards import CardDefinition
 
 
@@ -366,12 +366,33 @@ class Creature:
     def compute_power(self, game_state_ref=None) -> int:
         """
         Always call this to get current power. Never cache.
-        game_state_ref needed for per-card modifiers (Power Attacker).
+        game_state_ref needed for per-card modifiers (Power Attacker) and CDA formulas.
         """
+        # ── Power fix (from POWER_FIX effect action) ──────────────────────────────
+        # Highest priority — overrides everything including CDA
         fixed_power = self.temp_flags.get("_power_fix")
         if fixed_power is not None:
             return int(fixed_power)
 
+        # ── CDA (Characteristic-Defining Ability) ────────────────────────────────
+        cda = self.definition.cda_formula_type
+        if cda != CDAFormulaType.NONE:
+            cda_base = self._compute_cda_power(game_state_ref)
+            # CDA base replaces printed base_power; power_modifiers still apply on top
+            total = cda_base
+            for mod in self.power_modifiers:
+                if mod.is_per_card and game_state_ref is not None:
+                    count = game_state_ref.count_cards_in_zone(
+                        player=self.controller,
+                        zone=mod.per_card_zone,
+                        civilization=mod.per_card_civ
+                    )
+                    total += mod.amount * count
+                else:
+                    total += mod.amount
+            return total
+
+        # ── Standard power computation ────────────────────────────────────────────
         total = self.base_power
         for mod in self.power_modifiers:
             if mod.is_per_card and game_state_ref is not None:
@@ -384,6 +405,59 @@ class Creature:
             else:
                 total += mod.amount
         return total
+
+    def _compute_cda_power(self, game_state_ref=None) -> int:
+        """
+        Compute the CDA base power from the card's CDA formula.
+        Called by compute_power() when cda_formula_type != NONE.
+        """
+        cda = self.definition.cda_formula_type
+
+        if cda == CDAFormulaType.FIXED:
+            return self.definition.cda_fixed_value
+
+        if cda == CDAFormulaType.HAND_COUNT_MULT:
+            if game_state_ref is None:
+                return 0
+            count = game_state_ref.count_cards_in_zone(
+                player=self.controller,
+                zone="hand",
+                civilization=self.definition.cda_filter_civ
+            )
+            return count * self.definition.cda_multiplier
+
+        if cda == CDAFormulaType.BATTLE_ZONE_COUNT_MULT:
+            if game_state_ref is None:
+                return 0
+            count = game_state_ref.count_cards_in_zone(
+                player=self.controller,
+                zone="battle_zone",
+                civilization=self.definition.cda_filter_civ
+            )
+            return count * self.definition.cda_multiplier
+
+        if cda == CDAFormulaType.MANA_COUNT_MULT:
+            if game_state_ref is None:
+                return 0
+            count = game_state_ref.count_cards_in_zone(
+                player=self.controller,
+                zone="mana_zone",
+                civilization=self.definition.cda_filter_civ
+            )
+            return count * self.definition.cda_multiplier
+
+        if cda == CDAFormulaType.SHIELD_COUNT_MULT:
+            if game_state_ref is None:
+                return 0
+            count = game_state_ref.count_cards_in_zone(
+                player=self.controller,
+                zone="shield_zone",
+                civilization=self.definition.cda_filter_civ
+            )
+            return count * self.definition.cda_multiplier
+
+        # Fallback (should not reach here if cda != NONE)
+        return self.base_power
 
     # ── Keyword checks (delegate to definition + temp flags) ──────────────────
 
