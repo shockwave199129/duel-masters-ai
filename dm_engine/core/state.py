@@ -273,6 +273,10 @@ class GameState:
     # Uses a string type hint to avoid importing engine.replacement at module load
     # (core should not depend on engine). The default_factory lazy-imports.
     replacement_effects: object = field(default_factory=lambda: __import__("engine.replacement", fromlist=["ReplacementEffectRegistry"]).ReplacementEffectRegistry())
+    # ── Layered effects (rule 613-inspired continuous effect ordering) ──────────
+    # Same lazy-import pattern as replacement_effects to avoid circular dependency
+    # (core should not depend on engine at module load time).
+    layer_effects: object = field(default_factory=lambda: __import__("engine.layers", fromlist=["LayerEffectRegistry"]).LayerEffectRegistry())
 
     # ── Game result ───────────────────────────────────────────────────────────
     result:         GameResult = GameResult.IN_PROGRESS

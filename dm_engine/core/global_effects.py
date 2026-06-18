@@ -46,6 +46,7 @@ class GlobalEffect:
     target_player:   Optional[int]    # None=both, 0=p0, 1=p1
 
     duration:        str = "while_in_play"
+    timestamp:       int = 0              # monotonic ordering (set by GlobalEffectRegistry.add)
 
     # Extra parameters depending on effect_type
     # ── RESTRICT_SPELL_CIVILIZATION ──────────────────────────────────────────
@@ -129,8 +130,11 @@ class GlobalEffectRegistry:
     Provides query methods used by ActionGenerator and EffectExecutor.
     """
     effects: list[GlobalEffect] = field(default_factory=list)
+    _global_timestamp: int = 0
 
     def add(self, effect: GlobalEffect) -> None:
+        self._global_timestamp += 1
+        effect.timestamp = self._global_timestamp
         self.effects.append(effect)
 
     def remove_by_source(self, source_uid: str) -> int:
