@@ -166,7 +166,7 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
         s.record_action(action_type, action.player, action.card_id, creature.uid)
 
     elif action_type == ActionType.ACTIVATE_ABILITY:
-        _execute_activated_ability(s, action)
+        s = _execute_activated_ability(s, action)
 
     elif action_type == ActionType.HYPERIZE:
         creature = s.players[action.player].find_creature(action.card_uid or "")
@@ -192,7 +192,7 @@ def _require_card_uid(action: Action) -> None:
         raise ValueError(f"{action.action_type.value} requires card_uid")
 
 
-def _execute_activated_ability(state: GameState, action: Action) -> None:
+def _execute_activated_ability(state: GameState, action: Action) -> GameState:
     """
     Execute an ACTIVATE_ABILITY action: pay costs, then queue the activated
     ability's effects as PendingTriggers on the EffectStack for resolution.
@@ -237,11 +237,12 @@ def _execute_activated_ability(state: GameState, action: Action) -> None:
             )
             state.effect_stack.add_trigger(trigger)
             if state.effect_stack.pending_triggers:
-                resolve_pending_triggers(state)
+                state = resolve_pending_triggers(state)
 
     state.record_action(
         action.action_type, action.player, action.card_id, action.card_uid
     )
+    return state
 
 
 def _declare_attack(state: GameState, action: Action) -> None:

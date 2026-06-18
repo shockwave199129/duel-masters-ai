@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from uuid import uuid4
 
-from .enums import Civilization, Keyword, CardSubtype, CDAFormulaType
+from .enums import Civilization, Keyword, CardSubtype, CDAFormulaType, EffectAction
 from .cards import CardDefinition
 
 
@@ -666,7 +666,7 @@ class Creature:
             target = card_effect.effect_target
             value = card_effect.effect_value
 
-            if action == "power_modify":
+            if action == EffectAction.POWER_MODIFY:
                 # e.g. "your other Fire creatures get +1000 power"
                 amount = value.get("amount", 0)
                 filter_civ = target.get("civilization")
@@ -689,7 +689,7 @@ class Creature:
                 )
                 game_state.global_effects.add(eff)
 
-            elif action == "give_keyword":
+            elif action == EffectAction.GIVE_KEYWORD:
                 # e.g. "your creatures gain Blocker"
                 keyword = value.get("keyword")
                 if keyword is None:
