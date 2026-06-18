@@ -361,6 +361,9 @@ class GlobalEffectType(Enum):
     PER_CARD_POWER_MOD           = "per_card_power_mod"           # e.g. "other Fire creatures get +1000"
     PER_CARD_KEYWORD_GRANT       = "per_card_keyword_grant"       # e.g. "your creatures gain blocker"
 
+    # ── Replacement effects (rule 609) ─────────────────────────────────────────
+    REPLACEMENT_EFFECT           = "replacement_effect"            # "instead of X, Y happens"
+
     # ── Other ─────────────────────────────────────────────────────────────────
     EXTRA_SHIELD_BREAK           = "extra_shield_break"
 

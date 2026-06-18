@@ -771,8 +771,22 @@ def _destroy_creature(
     if creature not in p.battle_zone:
         return
 
-    # Rules 805.1b / 807.1b — Release / Dragon Evasion fires before the hyperspatial redirect.
-    # If applicable, the creature stays in BZ (flipped to lower face by the caller).
+    # ── Replacement effect check (rule 609, centralized registry) ──────────────
+    # Check the ReplacementEffectRegistry for any DESTROY replacement before
+    # falling through to the legacy hardcoded checks below.
+    from engine.replacement import EventType
+    replacement = state.replacement_effects.check_and_apply(
+        EventType.DESTROY,
+        state,
+        target_uid=creature.uid,
+        controller=player_idx,
+    )
+    if replacement is not None:
+        creature.temp_flags["_replacement_already_applied"] = True
+        return
+
+    # ── Legacy hardcoded replacement checks (Psychic Release / Dragon Evasion) ──
+    # These remain for backward compatibility with temp_flag-driven cards.
     if should_apply_psychic_release(creature) or should_apply_dragon_evasion(creature):
         creature.temp_flags["_replacement_already_applied"] = True
         return

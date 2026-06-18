@@ -194,7 +194,30 @@ def move_battle_to_graveyard(
     if creature is None:
         raise ValueError(f"Battle-zone card {creature_uid} not found")
 
-    # Rules 805.1b / 807.1b — Release / Dragon Evasion replacement effects fire FIRST.
+    # ── Replacement effect check (rule 609, centralized registry) ──────────────
+    # Check the ReplacementEffectRegistry for any applicable replacement before
+    # falling through to the legacy hardcoded checks below.
+    from engine.replacement import EventType
+    replacement = state.replacement_effects.check_and_apply(
+        EventType.LEAVE_BATTLE_ZONE,
+        state,
+        target_uid=creature_uid,
+        controller=player,
+    )
+    if replacement is not None:
+        # A replacement effect was found and applied. The caller is responsible
+        # for interpreting replacement_action (e.g. "flip_face", "banish").
+        # Mark the legacy flag so downstream code knows a replacement fired.
+        creature.temp_flags["_replacement_already_applied"] = True
+        return GraveyardCard(
+            definition=creature.definition,
+            uid=creature.uid,
+            died_from=f"{reason}_replacement_{replacement.replacement_action}",
+            died_on_turn=state.turn_number,
+        )
+
+    # ── Legacy hardcoded replacement checks (Psychic Release / Dragon Evasion) ──
+    # These remain for backward compatibility with temp_flag-driven cards.
     # If the creature has such an ability, it flips to lower-cost face and stays in BZ
     # instead of leaving. The caller is responsible for providing the lower-face definition
     # via a temp_flag; here we just signal that the replacement was applied.
@@ -387,7 +410,20 @@ def fortify_shield_with_castle(
 
 
 def draw_card(state: GameState, player: int) -> Optional[HandCard]:
-    """Draw the top card of the deck into hand. Empty deck draws do nothing."""
+    """Draw the top card of the deck into hand. Empty deck draws do nothing.
+
+    Checks the ReplacementEffectRegistry for any DRAW replacement before
+    performing the draw. If a replacement applies, it is marked used and
+    the draw proceeds normally (future: replacement may modify the draw).
+    """
+    # ── Replacement effect check (rule 609) ──────────────────────────────────
+    from engine.replacement import EventType
+    state.replacement_effects.check_and_apply(
+        EventType.DRAW,
+        state,
+        controller=player,
+    )
+
     p_state = state.players[player]
     if not p_state.deck:
         return None
@@ -399,7 +435,19 @@ def draw_card(state: GameState, player: int) -> Optional[HandCard]:
 
 
 def move_shield_to_standby(state: GameState, player: int, shield_index: int) -> ShieldCard:
-    """Remove one shield from shield zone and queue it for trigger declaration."""
+    """Remove one shield from shield zone and queue it for trigger declaration.
+
+    Checks the ReplacementEffectRegistry for any SHIELD_BREAK replacement
+    before performing the shield break.
+    """
+    # ── Replacement effect check (rule 609) ──────────────────────────────────
+    from engine.replacement import EventType
+    state.replacement_effects.check_and_apply(
+        EventType.SHIELD_BREAK,
+        state,
+        controller=player,
+    )
+
     p_state = state.players[player]
     if shield_index < 0 or shield_index >= len(p_state.shield_zone):
         raise ValueError(f"Invalid shield index {shield_index}")

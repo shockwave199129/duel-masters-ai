@@ -717,17 +717,55 @@ class Creature:
                 )
                 game_state.global_effects.add(eff)
 
+            elif action == EffectAction.NONE and card_effect.is_replacement_effect():
+                # Replacement effect — register with ReplacementEffectRegistry (rule 609)
+                from engine.replacement import ReplacementEffect, EventType
+
+                # Determine which event type this replacement applies to
+                event_type = self._resolve_replacement_event_type(card_effect)
+                if event_type is not None:
+                    applies_to = card_effect.effect_target.get("scope", "self")
+                    rep = ReplacementEffect(
+                        event_type=event_type,
+                        source_uid=self.uid,
+                        source_card_id=self.id,
+                        controller=self.controller,
+                        condition=card_effect.trigger_condition,
+                        replacement_action=card_effect.effect_value.get("action", "prevent"),
+                        replacement_value=card_effect.effect_value,
+                        applies_to=applies_to,
+                    )
+                    game_state.replacement_effects.register(rep)
+
+    @staticmethod
+    def _resolve_replacement_event_type(card_effect: CardEffect) -> Optional[str]:
+        """
+        Map a replacement CardEffect's trigger_event to an EventType constant.
+        Returns None if the event type is not yet supported.
+        """
+        from engine.replacement import EventType
+        from core.enums import TriggerEvent
+
+        te = card_effect.trigger_event
+        if te == TriggerEvent.ON_DESTROY:
+            return EventType.DESTROY
+        elif te == TriggerEvent.ON_LEAVE_BATTLE_ZONE:
+            return EventType.LEAVE_BATTLE_ZONE
+        # Other trigger events can be mapped as support expands
+        return None
+
     def remove_static_effects(self, game_state) -> None:
         """
         Remove all static effects that this creature has applied to the game state.
         Called when the creature leaves the battle zone.
 
-        Uses GlobalEffectRegistry.remove_by_source() to cleanly reverse all
-        effects sourced from this creature's uid.
+        Cleans up:
+        - GlobalEffectRegistry (power mods, keyword grants, etc.)
+        - ReplacementEffectRegistry (rule 609 replacement effects)
         """
         self.static_effects.clear()
         game_state.global_effects.remove_by_source(self.uid)
-
+        game_state.replacement_effects.unregister(self.uid)
 
     def __repr__(self) -> str:
         state = []
