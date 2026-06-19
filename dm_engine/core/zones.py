@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from uuid import uuid4
 
-from .enums import Civilization, Keyword, CardSubtype, CDAFormulaType, EffectAction
+from .enums import Civilization, Keyword, CardSubtype, CDAFormulaType, EffectAction, INFINITY
 from .cards import CardDefinition
 
 
@@ -367,7 +367,19 @@ class Creature:
         """
         Always call this to get current power. Never cache.
         game_state_ref needed for per-card modifiers (Power Attacker) and CDA formulas.
+        
+        Rule 108.1c: ∞ power is treated as larger than any finite number.
+        If a creature has ∞ power and receives -∞, it is destroyed.
         """
+        # ── Infinity power check (Rule 108.1c) ─────────────────────────────────
+        # Check for -∞ modifier first (destroys creature)
+        for mod in self.power_modifiers:
+            if mod.amount == -INFINITY:
+                return -INFINITY  # sentinel for "should be destroyed"
+        
+        if self.definition.is_infinite_power:
+            return INFINITY
+
         # ── Power fix (from POWER_FIX effect action) ──────────────────────────────
         # Highest priority — overrides everything including CDA
         fixed_power = self.temp_flags.get("_power_fix")

@@ -119,6 +119,9 @@ class CardDefinition:
     god_glink_open_sides: frozenset[str] = frozenset()
     psychic_super_cell_slugs: frozenset[str] = frozenset()
 
+    # Infinity power (Rule 108.1c) — if True, this creature has ∞ power
+    is_infinite_power: bool = False
+
     def is_creature(self) -> bool:
         return self.card_type == CardType.CREATURE
 

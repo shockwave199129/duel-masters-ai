@@ -208,6 +208,11 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
         _do_twinpact_flip(s, trigger)
     elif action == EffectAction.FORBIDDEN_FLIP:
         _do_forbidden_flip(s, trigger)
+    # ── Win/Loss by card effect (Rule 104.2c) ────────────────────────────────
+    elif action == EffectAction.WIN_CONDITION:
+        _do_win_by_effect(s, controller, trigger)
+    elif action == EffectAction.LOSE_CONDITION:
+        _do_lose_by_effect(s, controller, trigger)
     # EffectAction.NONE and unknown values intentionally no-op.
 
     return check_state_based_actions(s)
@@ -300,14 +305,42 @@ def _do_draw(state: GameState, controller: int, trigger: PendingTrigger) -> None
 
 
 def _do_destroy(state: GameState, controller: int, trigger: PendingTrigger) -> None:
-    target_uid = _trigger_data(trigger).get("target_uid")
-    found = _find_creature(state, target_uid)
-    if not found:
+    """
+    Destroy target creature(s). 
+    
+    Rule 606.2: If an effect targets multiple creatures and some targets
+    become invalid, the effect still resolves on all remaining valid targets.
+    "Do everything you can" (Rule 101.3).
+    """
+    data = _trigger_data(trigger)
+    
+    # Single target (backward compatibility)
+    target_uid = data.get("target_uid")
+    if target_uid:
+        found = _find_creature(state, target_uid)
+        if not found:
+            return
+        player_idx, creature = found
+        if not creature.can_be_destroyed():
+            return
+        move_battle_to_graveyard(state, player_idx, creature.uid, reason="effect")
         return
-    player_idx, creature = found
-    if not creature.can_be_destroyed():
-        return
-    move_battle_to_graveyard(state, player_idx, creature.uid, reason="effect")
+    
+    # Multiple targets (partial execution, Rule 606.2)
+    target_uids = data.get("target_uids", [])
+    destroyed_any = False
+    for uid in target_uids:
+        found = _find_creature(state, uid)
+        if not found:
+            continue  # Skip invalid targets (Rule 606.2: partial execution)
+        player_idx, creature = found
+        if not creature.can_be_destroyed():
+            continue  # Skip creatures that can't be destroyed
+        move_battle_to_graveyard(state, player_idx, creature.uid, reason="effect")
+        destroyed_any = True
+    
+    # Even if no creatures were destroyed, the effect still resolved
+    # (Rule 101.3: do everything that can be done)
 
 
 def _do_return_to_hand(state: GameState, controller: int, trigger: PendingTrigger) -> None:
@@ -812,3 +845,21 @@ def _do_forbidden_flip(state: GameState, trigger: PendingTrigger) -> None:
         return
     _, creature = found
     flip_forbidden(creature)
+
+
+def _do_win_by_effect(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle WIN_CONDITION effect: the controller wins the game (Rule 104.2c).
+    
+    Rule 104.2c: If a player meets both a win and lose condition simultaneously,
+    the player wins.
+    """
+    state.game_result = ("win", controller)
+
+
+def _do_lose_by_effect(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle LOSE_CONDITION effect: the controller loses the game (Rule 104.2c).
+    """
+    opponent = 1 - controller
+    state.game_result = ("win", opponent)

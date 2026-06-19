@@ -350,6 +350,80 @@ class GlobalEffectRegistry:
                 total += eff.cost_mod_amount
         return total
 
+    # ── Hand-zone static effects (Rule 604.2, 110.4e) ──────────────────────────
+
+    def get_hand_zone_effects(self, player: int) -> list[GlobalEffect]:
+        """
+        Return all global effects that apply to cards in hand.
+        
+        Rule 110.4e: Abilities that impose limits or modifications on the
+        execution of the card itself function while those cards are in the
+        zone from which they are attempting to be executed (usually the hand).
+        
+        This includes:
+        - COST_REDUCE / COST_INCREASE (cost modifiers from hand)
+        - LOCK_ALL_SPELLS / LOCK_ALL_CREATURES (cannot execute)
+        - LOCK_CARD_TYPE (cannot execute specific types)
+        - RESTRICT_SUMMON_CIVILIZATION (can only summon certain civs)
+        
+        Args:
+            player: player whose hand to check
+            
+        Returns:
+            List of GlobalEffect objects that apply to hand-zone execution
+        """
+        results = []
+        for eff in self.effects:
+            if not eff.affects_player(player):
+                continue
+            if eff.effect_type in (
+                GlobalEffectType.COST_REDUCE,
+                GlobalEffectType.COST_INCREASE,
+                GlobalEffectType.LOCK_ALL_SPELLS,
+                GlobalEffectType.LOCK_ALL_CREATURES,
+                GlobalEffectType.LOCK_CARD_TYPE,
+                GlobalEffectType.RESTRICT_SUMMON_CIVILIZATION,
+                GlobalEffectType.RESTRICT_SPELL_CIVILIZATION,
+            ):
+                results.append(eff)
+        return results
+
+    def can_execute_from_hand(self, player: int, card_type: str, card_subtype: str,
+                               civs: frozenset) -> tuple[bool, str]:
+        """
+        Check whether a card can be executed from hand given current global effects.
+        
+        Rule 110.4e: Static abilities that restrict execution apply in the hand.
+        
+        Args:
+            player: player attempting to execute
+            card_type: card type (e.g. "Creature", "Spell")
+            card_subtype: card subtype (e.g. "Evolution", "GR")
+            civs: civilizations of the card
+            
+        Returns:
+            (can_execute: bool, reason: str) — reason is empty if allowed
+        """
+        for eff in self.effects:
+            if not eff.affects_player(player):
+                continue
+            if eff.effect_type == GlobalEffectType.LOCK_ALL_SPELLS and card_type == "Spell":
+                return False, "Cannot cast spells"
+            if eff.effect_type == GlobalEffectType.LOCK_ALL_CREATURES and card_type == "Creature":
+                return False, "Cannot summon creatures"
+            if eff.effect_type == GlobalEffectType.LOCK_CARD_TYPE:
+                if eff.locked_card_type and card_type == eff.locked_card_type:
+                    return False, f"Cannot execute {card_type}"
+                if eff.locked_card_subtype and card_subtype == eff.locked_card_subtype:
+                    return False, f"Cannot execute {card_subtype}"
+            if eff.effect_type == GlobalEffectType.RESTRICT_SUMMON_CIVILIZATION:
+                if card_type == "Creature" and not civs.intersection(eff.allowed_civilizations):
+                    return False, f"Can only summon {', '.join(c.value for c in eff.allowed_civilizations)} creatures"
+            if eff.effect_type == GlobalEffectType.RESTRICT_SPELL_CIVILIZATION:
+                if card_type == "Spell" and not civs.intersection(eff.allowed_civilizations):
+                    return False, f"Can only cast {', '.join(c.value for c in eff.allowed_civilizations)} spells"
+        return True, ""
+
     def get_granted_keywords(
         self,
         controller: int,

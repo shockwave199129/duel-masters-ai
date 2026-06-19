@@ -332,6 +332,12 @@ class EffectAction(Enum):
     FORBIDDEN_FLIP      = "forbidden_flip"      # flip face on leaving battle zone
     # ── Zerom ritual system (rule 812) ───────────────────────────────────────────
     ZEROM_RITUAL        = "zerom_ritual"        # cast ritual, flip to creature
+    # ── Forbidden Release & NEO Evolution (rules 809, 802) ──────────────────────
+    FORBIDDEN_RELEASE   = "forbidden_release"   # Rule 809 — flip Forbidden from hand to BZ
+    NEO_EVOLVE          = "neo_evolve"          # Rule 802 — NEO in-place evolution
+    # ── Win/Loss conditions (Rule 104.2c) ──────────────────────────────────────
+    WIN_CONDITION       = "win_condition"       # Win the game by card effect
+    LOSE_CONDITION      = "lose_condition"      # Lose the game by card effect
     ZEROM_FLIP          = "zerom_flip"          # flip to creature side
     NONE                = "none"
 
@@ -379,6 +385,14 @@ class GlobalEffectType(Enum):
 
     # ── Other ─────────────────────────────────────────────────────────────────
     EXTRA_SHIELD_BREAK           = "extra_shield_break"
+
+
+# ── Infinity sentinel (Rule 108.1c) ──────────────────────────────────────────
+# Used as power value for creatures with ∞ power.
+# Any finite number is less than INFINITY.
+# ∞ + X = ∞ for any finite X.
+# ∞ - ∞ triggers destruction (handled in battle resolver).
+INFINITY = 999999
 
 
 # ── Mana Selection entry ──────────────────────────────────────────────────────

@@ -4,13 +4,18 @@ engine/battle_resolver.py — resolve Duel Masters battles.
 
 from __future__ import annotations
 
-from core.enums import Keyword, Phase
+from core.enums import Keyword, Phase, INFINITY
 from core.state import GameState
 from engine.sba_checker import check_state_based_actions
 
 
 def resolve_battle(state: GameState) -> GameState:
-    """Resolve the current battle, mark losers, then run SBAs."""
+    """Resolve the current battle, mark losers, then run SBAs.
+    
+    Rule 108.1c: ∞ power is larger than any finite number.
+    ∞ vs ∞ is a tie (both lose).
+    Creature with -∞ power is destroyed.
+    """
     s = state.copy()
     ctx = s.attack_context
     if ctx is None:
@@ -34,21 +39,29 @@ def resolve_battle(state: GameState) -> GameState:
     attacker_power = attacker.compute_power(s)
     defender_power = defender.compute_power(s)
 
+    # Rule 108.1c: -∞ power means creature is destroyed
+    if attacker_power == -INFINITY:
+        attacker.set_flag("lost_battle", True)
+    if defender_power == -INFINITY:
+        defender.set_flag("lost_battle", True)
+
     if attacker.has_keyword(Keyword.SLAYER):
         defender.set_flag("lost_battle", True)
     if defender.has_keyword(Keyword.SLAYER):
         attacker.set_flag("lost_battle", True)
 
     if attacker_always_wins and defender_always_wins:
-        pass
+        pass  # both win = neither loses (rule 115.3c)
     elif attacker_always_wins:
         defender.set_flag("lost_battle", True)
     elif defender_always_wins:
         attacker.set_flag("lost_battle", True)
     elif attacker_power == defender_power:
+        # ∞ vs ∞ is a tie — both lose (rule 115.3b)
         attacker.set_flag("lost_battle", True)
         defender.set_flag("lost_battle", True)
     elif attacker_power > defender_power:
+        # INFINITY > any finite number handles ∞ vs normal automatically
         defender.set_flag("lost_battle", True)
     else:
         attacker.set_flag("lost_battle", True)

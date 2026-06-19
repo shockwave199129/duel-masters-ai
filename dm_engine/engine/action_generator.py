@@ -346,6 +346,14 @@ def _actions_for_hand_card(
     card_type    = defn.card_type
     card_subtype = defn.card_subtype
 
+    # ── Hand-zone static effects (Rule 110.4e) ──────────────────────────────
+    # Check global effects that restrict execution from hand
+    can_execute, reason = state.global_effects.can_execute_from_hand(
+        player, card_type.value, card_subtype.value, defn.civilizations
+    )
+    if not can_execute:
+        return []  # Blocked by hand-zone static effect
+
     # ── Creatures ──────────────────────────────────────────────────────────
     if card_type == CardType.CREATURE:
         # Rule 814.1: King Creatures are only summoned by combining cells.
@@ -587,6 +595,61 @@ def _generate_activated_ability_actions(
                         mana_used=combo,
                         tap_source=tap_cost,
                     ))
+
+    # ── Forbidden Release ability actions (Rule 809) ─────────────────────────
+    # Forbidden creatures in hand can be "released" (flipped and summoned)
+    # as an activated ability. This is similar to S-Trigger but from hand.
+    for hand_card in p_state.hand:
+        hc_def = hand_card.definition
+        if hc_def.card_subtype == CardSubtype.FORBIDDEN:
+            # Check if this Forbidden card has a release ability
+            for i, effect in enumerate(hc_def.get_activated_effects()):
+                if effect.effect_action == EffectAction.FORBIDDEN_RELEASE:
+                    cost_info = effect.effect_value or {}
+                    mana_cost = cost_info.get("mana_cost", 0)
+                    if mana_cost > 0:
+                        combos = _get_mana_combinations(
+                            p_state.mana_zone, mana_cost, hc_def.civilizations
+                        )
+                    else:
+                        combos = [[]]
+                    for combo in combos:
+                        actions.append(activate_ability(
+                            player=player,
+                            source_uid=hand_card.uid,
+                            source_card_id=hc_def.id,
+                            ability_index=i,
+                            mana_used=combo,
+                            tap_source=False,
+                            is_forbidden_release=True,
+                        ))
+
+    # ── NEO Evolution ability actions (Rule 802) ─────────────────────────────
+    # NEO creatures in the battle zone can activate their evolution ability
+    # to place a new evolution stack entry (evolve in place).
+    for creature in p_state.battle_zone:
+        cr_def = creature.definition
+        if cr_def.card_subtype in (CardSubtype.NEO_EVOLUTION, CardSubtype.NEO):
+            for i, effect in enumerate(cr_def.get_activated_effects()):
+                if effect.effect_action == EffectAction.NEO_EVOLVE:
+                    cost_info = effect.effect_value or {}
+                    mana_cost = cost_info.get("mana_cost", 0)
+                    if mana_cost > 0:
+                        combos = _get_mana_combinations(
+                            p_state.mana_zone, mana_cost, cr_def.civilizations
+                        )
+                    else:
+                        combos = [[]]
+                    for combo in combos:
+                        actions.append(activate_ability(
+                            player=player,
+                            source_uid=creature.uid,
+                            source_card_id=cr_def.id,
+                            ability_index=i,
+                            mana_used=combo,
+                            tap_source=True,
+                            is_neo_evolve=True,
+                        ))
 
     return actions
 
