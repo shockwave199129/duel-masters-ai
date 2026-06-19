@@ -67,6 +67,7 @@ class CardSubtype(Enum):
     GACHARANGE        = "Gacharange"
     NEO               = "NEO"              # NEO Creature (rule 802)
     DREAM             = "Dream"            # Dream Rare (rule 817)
+    ZEROM             = "zerom"            # rule 812 — double-sided ritual/creature
 
 
 # ── Zones ─────────────────────────────────────────────────────────────────────
@@ -324,6 +325,12 @@ class EffectAction(Enum):
     PSYCHIC_RELEASE     = "psychic_release"     # rule 805.1b — replacement, flip to lower face
     COMBINE             = "combine"             # rule 814.1 — King Cell combine
     EXTRA_EX_LIFE       = "extra_ex_life"       # Volzeos-style extra EX Life on combine
+    # ── Twinpact / Forbidden flip mechanics (Phase 5A) ─────────────────────────
+    TWINPACT_FLIP       = "twinpact_flip"       # flip to other face on summon
+    FORBIDDEN_FLIP      = "forbidden_flip"      # flip face on leaving battle zone
+    # ── Zerom ritual system (rule 812) ───────────────────────────────────────────
+    ZEROM_RITUAL        = "zerom_ritual"        # cast ritual, flip to creature
+    ZEROM_FLIP          = "zerom_flip"          # flip to creature side
     NONE                = "none"
 
 

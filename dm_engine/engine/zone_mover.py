@@ -12,6 +12,7 @@ from typing import Optional
 from core.enums import ManaUsage, CardSubtype
 from core.state import GameState
 from core.zones import Creature, EvolutionStackEntry, GraveyardCard, HandCard, ManaCard, ShieldCard, HyperspatialCard, _new_uid
+from core.cards import is_twinpact, is_forbidden, get_other_face
 
 
 def creature_to_hyperspatial_card(creature: Creature) -> HyperspatialCard:
@@ -95,6 +96,8 @@ def move_hand_to_battle(
     )
     p_state.battle_zone.append(creature)
     creature.apply_static_effects(state)
+    # Phase 5A: Twinpact flip on summon
+    flip_twinpact(creature)
     return creature
 
 
@@ -150,6 +153,9 @@ def move_battle_to_hyperspatial(
     if creature is None:
         raise ValueError(f"Battle-zone card {creature_uid} not found")
 
+    # Phase 5A: Forbidden flip before leaving battle zone
+    flip_forbidden(creature)
+
     creature.remove_static_effects(state)
     state.players[player].battle_zone.remove(creature)
 
@@ -193,6 +199,9 @@ def move_battle_to_graveyard(
     creature = state.players[player].find_creature(creature_uid)
     if creature is None:
         raise ValueError(f"Battle-zone card {creature_uid} not found")
+
+    # Phase 5A: Forbidden flip before leaving battle zone
+    flip_forbidden(creature)
 
     # ── Replacement effect check (rule 609, centralized registry) ──────────────
     # Check the ReplacementEffectRegistry for any applicable replacement before
@@ -930,6 +939,96 @@ def apply_dragon_evasion(
     return creature
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Twinpact and Forbidden flip logic (Phase 5A)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def flip_twinpact(creature: Creature, card_db=None) -> Creature:
+    """
+    Flip a Twinpact card to its other face when it enters the battle zone.
+
+    If the creature is a multi-face card and has a valid other_face_id,
+    this swaps to a new CardDefinition with the other_face_id as the card_id
+    (simplified flip — full card_db resolution is a stub for later).
+    Toggles the _twinpact_flipped temp flag.
+    """
+    if not is_twinpact(creature.definition):
+        return creature
+    if creature.definition.other_face_id is None:
+        return creature
+
+    # Simplified flip: create a new CardDefinition with the other_face_id
+    # Full card_db resolution is deferred (see get_other_face stub)
+    old_def = creature.definition
+    from core.cards import CardDefinition as _CD
+    new_def = _CD(
+        id=old_def.other_face_id,
+        slug=old_def.slug,
+        name=old_def.name,
+        cost=old_def.cost,
+        power=old_def.power,
+        card_type=old_def.card_type,
+        card_subtype=old_def.card_subtype,
+        civilizations=old_def.civilizations,
+        races=old_def.races,
+        keywords=old_def.keywords,
+        effects=old_def.effects,
+        evolution_source_races=old_def.evolution_source_races,
+        evolution_source_types=old_def.evolution_source_types,
+        is_multiface=old_def.is_multiface,
+        other_face_id=old_def.id,  # point back to the original
+    )
+    creature.definition = new_def
+    creature.temp_flags["_twinpact_flipped"] = not creature.temp_flags.get("_twinpact_flipped", False)
+    return creature
+
+
+def flip_forbidden(creature: Creature) -> Creature:
+    """
+    Flip a Forbidden or Final Forbidden card when it leaves the battle zone.
+
+    Toggles the _forbidden_flipped temp flag and flips the face field (0→1 or 1→0).
+    """
+    if not is_forbidden(creature.definition):
+        return creature
+    creature.temp_flags["_forbidden_flipped"] = not creature.temp_flags.get("_forbidden_flipped", False)
+    creature.face = 1 - creature.face
+    return creature
+
+
+def move_zerom_to_battle(state: GameState, controller: int, creature_def: "CardDefinition") -> "Creature":
+    """
+    Place a Zerom card from hand/mana into the battle zone as a creature (rule 812).
+    Stub — full Zerom ritual logic is in development.
+    """
+    from core.cards import CardDefinition as _CD
+    p_state = state.players[controller]
+    creature = Creature(
+        definition=creature_def,
+        uid=_new_uid(),
+        controller=controller,
+        owner=controller,
+        entered_turn=state.turn_number,
+        has_summoning_sickness=True,
+    )
+    creature.temp_flags["_zerom_flipped"] = True
+    p_state.battle_zone.append(creature)
+    return creature
+
+
+def move_ultra_gr_to_battle(state: GameState, controller: int, creature_uid: str) -> "Creature":
+    """
+    Move an Ultra GR creature face-up into the battle zone (rule 408).
+    Stub — full Ultra GR logic is in development.
+    """
+    p_state = state.players[controller]
+    creature = p_state.find_creature(creature_uid)
+    if creature is None:
+        raise ValueError(f"Ultra GR creature {creature_uid} not found")
+    creature.face = 1
+    return creature
+
+
 def _remove_from_hand(state: GameState, player: int, card_uid: str) -> HandCard:
     p_state = state.players[player]
     hand_card = p_state.find_in_hand(card_uid)
@@ -937,3 +1036,38 @@ def _remove_from_hand(state: GameState, player: int, card_uid: str) -> HandCard:
         raise ValueError(f"Hand card {card_uid} not found for player {player}")
     p_state.hand.remove(hand_card)
     return hand_card
+
+def move_ultra_gr_to_battle(
+    state: GameState,
+    player: int,
+    card_def: CardDefinition,
+) -> Creature:
+    """
+    Summon a GR creature from the Ultra GR zone into the battle zone.
+
+    Steps:
+      1. Remove the CardDefinition from state.players[player].ultra_gr_zone
+      2. Create a new Creature from the definition
+      3. Add to battle_zone with has_summoning_sickness = True
+      4. Apply static effects
+
+    GR creatures have summoning sickness unless they have Speed Attacker.
+    """
+    p_state = state.players[player]
+
+    # Remove from Ultra GR zone
+    p_state.ultra_gr_zone = [c for c in p_state.ultra_gr_zone if c.id != card_def.id]
+
+    # Create the creature
+    creature = Creature(
+        definition=card_def,
+        uid=_new_uid(),
+        controller=player,
+        owner=player,
+        entered_turn=state.turn_number,
+        has_summoning_sickness=True,
+    )
+    p_state.battle_zone.append(creature)
+    creature.apply_static_effects(state)
+    return creature
+

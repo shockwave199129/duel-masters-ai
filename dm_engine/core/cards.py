@@ -202,6 +202,17 @@ class CardDefinition:
         return NotImplemented
 
 
+# ── Zerom helpers (rule 812) ──────────────────────────────────────────────────
+def is_zerom(card_def: CardDefinition) -> bool:
+    """Check if a card is a Zerom (double-sided ritual/creature, rule 812)."""
+    return card_def.card_subtype == CardSubtype.ZEROM
+
+
+def is_zerom_creature(creature: "Creature") -> bool:
+    """Check if a creature is a Zerom that has been flipped to its creature side."""
+    return bool(creature.temp_flags.get("_zerom_flipped"))
+
+
 # ── Deck Definition ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -277,6 +288,33 @@ class DeckDefinition:
             name = self.card_definitions[card_id].name if card_id in self.card_definitions else f"ID:{card_id}"
             lines.append(f"  {count}x {name}")
         return "\n".join(lines)
+
+
+# ── Twinpact / Forbidden flip helpers (Phase 5A) ──────────────────────────────
+
+def is_twinpact(card_def: CardDefinition) -> bool:
+    """Return True if this card is a Twinpact (multi-face) card."""
+    return card_def.is_multiface
+
+
+def is_forbidden(card_def: CardDefinition) -> bool:
+    """Return True if this card is a Forbidden or Final Forbidden card."""
+    from .enums import CardSubtype
+    return card_def.card_subtype in (CardSubtype.FORBIDDEN, CardSubtype.FINAL_FORBIDDEN)
+
+
+def get_other_face(card_def: CardDefinition, card_db=None) -> Optional[CardDefinition]:
+    """
+    Resolve the other-face CardDefinition for a multi-face card.
+
+    If card_db is None or other_face_id is None, returns None.
+    This is a stub for when card database resolution is available.
+    """
+    if card_def.other_face_id is None:
+        return None
+    if card_db is not None:
+        return card_db.get(card_def.other_face_id)
+    return None
 
 
 # ── Constants imported for convenience ────────────────────────────────────────

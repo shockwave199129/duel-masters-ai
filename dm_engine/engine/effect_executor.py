@@ -15,14 +15,18 @@ from engine.zone_mover import (
     draw_card,
     dragsolve_dragheart,
     awaken_psychic_creature,
+    flip_twinpact,
+    flip_forbidden,
     link_psychic_cells,
     move_battle_to_graveyard,
     move_battle_to_hyperspatial,
     move_hand_to_battle,
+    move_zerom_to_battle,
     move_hand_to_graveyard,
     move_hand_to_mana,
     move_hand_to_shield,
     move_shield_to_standby,
+    move_ultra_gr_to_battle,
     tap_mana_for_payment,
 )
 
@@ -195,6 +199,14 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
         _do_combine(s, controller, trigger)
     elif action == EffectAction.EXTRA_EX_LIFE:
         _store_temp_value(s, trigger, "extra_ex_life")
+    elif action == EffectAction.ZEROM_RITUAL:
+        _do_zerom_ritual(s, controller, trigger)
+    elif action == EffectAction.ZEROM_FLIP:
+        _do_zerom_ritual(s, controller, trigger)
+    elif action == EffectAction.TWINPACT_FLIP:
+        _do_twinpact_flip(s, trigger)
+    elif action == EffectAction.FORBIDDEN_FLIP:
+        _do_forbidden_flip(s, trigger)
     # EffectAction.NONE and unknown values intentionally no-op.
 
     return check_state_based_actions(s)
@@ -583,6 +595,16 @@ def _do_reveal(state: GameState, controller: int, trigger: PendingTrigger) -> No
 
 def _do_gr_summon(state: GameState, controller: int, trigger: PendingTrigger) -> None:
     data = _trigger_data(trigger)
+    source_card_id = data.get("source_card_id")
+
+    # Check if the card is in the Ultra GR zone
+    if source_card_id is not None:
+        ultra_gr_def = state.find_in_ultra_gr(controller, source_card_id)
+        if ultra_gr_def is not None:
+            move_ultra_gr_to_battle(state, controller, ultra_gr_def)
+            return
+
+    # Otherwise, summon from hand (existing behavior)
     card_uid = data.get("card_uid")
     if card_uid:
         move_hand_to_battle(state, controller, card_uid)
@@ -702,6 +724,37 @@ def _do_combine(state: GameState, controller: int, trigger: PendingTrigger) -> N
     combine_king_cells(state, controller, king_def, cell_uids)
 
 
+def _do_zerom_ritual(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle Zerom ritual cast: remove the Zerom from its current zone,
+    create a creature with _zerom_flipped flag, and place it in the battle zone.
+    (Rule 812)
+    """
+    data = _trigger_data(trigger)
+    source_uid = data.get("target_uid") or trigger.source_uid
+    if not source_uid:
+        return
+
+    # Find and remove the Zerom card from its current zone
+    p_state = state.players[controller]
+    hand_card = p_state.find_in_hand(source_uid)
+    if hand_card is not None:
+        p_state.hand.remove(hand_card)
+        card_def = hand_card.definition
+    else:
+        # Check mana zone (in case Zerom was charged)
+        mana_card = p_state.find_mana(source_uid)
+        if mana_card is not None:
+            p_state.mana_zone.remove(mana_card)
+            card_def = mana_card.definition
+        else:
+            return  # card not found in any playable zone
+
+    # Use the creature face definition if available, otherwise the card itself
+    creature_def = card_def  # Zerom card def IS the creature face
+    move_zerom_to_battle(state, controller, creature_def)
+
+
 def _store_temp_value(state: GameState, trigger: PendingTrigger, key: str) -> None:
     data = _trigger_data(trigger)
     target_uid = data.get("target_uid")
@@ -710,3 +763,39 @@ def _store_temp_value(state: GameState, trigger: PendingTrigger, key: str) -> No
         return
     _, creature = found
     creature.temp_flags[key] = True
+
+
+# ── Twinpact / Forbidden flip handlers (Phase 5A) ─────────────────────────────
+
+def _do_twinpact_flip(state: GameState, trigger: PendingTrigger) -> None:
+    """
+    Handle TWINPACT_FLIP effect: flip a Twinpact creature to its other face.
+
+    The trigger data should contain the target creature's uid.
+    """
+    data = _trigger_data(trigger)
+    target_uid = data.get("target_uid") or data.get("creature_uid")
+    if not target_uid:
+        return
+    found = _find_creature(state, target_uid)
+    if not found:
+        return
+    _, creature = found
+    flip_twinpact(creature)
+
+
+def _do_forbidden_flip(state: GameState, trigger: PendingTrigger) -> None:
+    """
+    Handle FORBIDDEN_FLIP effect: flip a Forbidden card's face when leaving battle zone.
+
+    The trigger data should contain the target creature's uid.
+    """
+    data = _trigger_data(trigger)
+    target_uid = data.get("target_uid") or data.get("creature_uid")
+    if not target_uid:
+        return
+    found = _find_creature(state, target_uid)
+    if not found:
+        return
+    _, creature = found
+    flip_forbidden(creature)
