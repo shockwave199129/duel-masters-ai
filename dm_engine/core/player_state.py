@@ -57,6 +57,11 @@ class PlayerState:
     # (rule 408.1). Both players know the count but not which cards.
     ultra_gr_zone:     list[CardDefinition] = field(default_factory=list)
 
+    # Gods zone: God creatures linked by G-Link (rule 804, 806).
+    # Stores linked God stacks (multiple Gods linked together in 2D grid).
+    # Each entry is a tuple of (group_id, creatures_in_group)
+    gods_zone:         list[tuple[str, list[Creature]]] = field(default_factory=list)
+
     # ── Deck knowledge (public info) ──────────────────────────────────────────
     # The player knows their deck composition. This never changes after game start.
     # {card_id → count} — e.g. {1: 4, 5: 3, 12: 4}
