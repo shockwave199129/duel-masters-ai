@@ -101,7 +101,7 @@ def move_hand_to_battle(
     return creature
 
 
-def move_hand_to_graveyard(def move_zerom_to_battle(
+def move_zerom_to_battle(
     state: GameState,
     player: int,
     card_def: "CardDefinition",
@@ -128,7 +128,7 @@ def move_hand_to_graveyard(def move_zerom_to_battle(
     return creature
 
 
-
+def move_hand_to_graveyard(
     state: GameState,
     player: int,
     card_uid: str,
