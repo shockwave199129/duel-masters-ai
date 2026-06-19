@@ -56,7 +56,7 @@ class ReplacementEffect:
         replacement_value:   parameters for the replacement action
         applies_to:         "self" | "controller_creatures" | "all_creatures" | "event_target"
         is_used:            whether this replacement has already fired this event cycle
-        priority:           lower = fires first (for future APNAP support)
+        timestamp:          when this effect was registered (for APNAP ordering)
     """
     event_type: str
     source_uid: str
@@ -67,7 +67,7 @@ class ReplacementEffect:
     replacement_value: dict = field(default_factory=dict)
     applies_to: str = "self"
     is_used: bool = False
-    priority: int = 0
+    timestamp: int = 0
 
     def __repr__(self) -> str:
         return (
@@ -88,11 +88,14 @@ class ReplacementEffectRegistry:
     destroy / draw / graveyard / zone-change operation.
     """
     effects: list[ReplacementEffect] = field(default_factory=list)
+    _timestamp_counter: int = 0  # auto-incremented for APNAP ordering
 
     # Registration / unregistration ──────────────────────────────────────────
 
     def register(self, effect: ReplacementEffect) -> None:
-        """Add a replacement effect to the registry."""
+        """Add a replacement effect to the registry with auto-incremented timestamp."""
+        effect.timestamp = self._timestamp_counter
+        self._timestamp_counter += 1
         self.effects.append(effect)
 
     def unregister(self, source_uid: str) -> int:
@@ -169,8 +172,13 @@ class ReplacementEffectRegistry:
         controller: Optional[int] = None,
     ) -> Optional[ReplacementEffect]:
         """
-        Find the first applicable replacement effect for this event.
-        Marks it as used and returns it, or None if no replacement applies.
+        Find the highest-priority applicable replacement effect for this event.
+        
+        Implements Rule 609.8: replacement effects follow APNAP priority:
+          1. Turn player's replacements first, then non-turn player's
+          2. Within each tier, earlier registration (lower timestamp) fires first
+        
+        Marks the chosen effect as used and returns it, or None if no replacement applies.
         """
         replacements = self.get_applicable_replacements(
             event_type, game_state, target_uid, controller
@@ -178,7 +186,16 @@ class ReplacementEffectRegistry:
         if not replacements:
             return None
 
-        # Use the first one found (Priority order for Phase 4)
+        # Sort by APNAP priority: turn player first, then by registration order (timestamp)
+        turn_player = game_state.turn_info.active_player
+        
+        def sort_key(effect: ReplacementEffect) -> tuple:
+            is_turn_player = 0 if effect.controller == turn_player else 1
+            return (is_turn_player, effect.timestamp)
+        
+        replacements.sort(key=sort_key)
+        
+        # Use the highest-priority replacement
         chosen = replacements[0]
         chosen.is_used = True
         return chosen
