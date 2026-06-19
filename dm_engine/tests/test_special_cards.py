@@ -10,6 +10,7 @@ Sections:
   6. Star Evolution uniqueness SBA (Rule 813)
   7. Dream Rare uniqueness SBA (Rule 817)
   8. Duel Mate cleanup SBA (Rule 820)
+  8b. Duel Mate full mechanics — Phase 9.1 (Rule 820)
   9. G-Castle shield behavior (Rule 822)
   10. Hyper Soul X stub (Rule 818)
   11. WD Field stub (Rule 819)
@@ -55,6 +56,7 @@ from engine.zone_mover import (
     move_zerom_to_battle,
     swap_hyper_mode,
     move_hand_to_battle,
+    move_hand_to_hyperspatial,
     move_shield_to_standby,
     move_standby_shield_to_hand,
     fortify_g_castle_to_shield,
@@ -457,7 +459,6 @@ check("8b: is_duel_mate() returns True for DUEL_MATE subtype",
 
 # 8c) Duel Mate creature in battle zone is cleaned up by SBA
 duel_mate_creature = make_creature(duel_mate_card, controller=0, entered_turn=2)
-duel_mate_creature.temp_flags["_duel_mate"] = True
 duel_mate_creature.has_summoning_sickness = False  # not properly summoned
 state_8c = make_state(p0_battle=[duel_mate_creature])
 from engine.sba_checker import _sba_duel_mate_cleanup
@@ -467,6 +468,92 @@ hyper_count = len(state_8c.players[0].hyperspatial_zone)
 check("8c: Duel Mate in battle zone cleaned up by SBA",
       battle_count == 0 and hyper_count >= 1,
       f"battle={battle_count}, hyperspatial={hyper_count}")
+# ─────────────────────────────────────────────────────────────────────────────
+# Section 8b: Duel Mate Full Mechanics (Rule 820) — Phase 9.1
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n" + "─" * 60)
+print("  SECTION 8B: DUEL MATE FULL MECHANICS (Rule 820) — Phase 9.1")
+print("─" * 60)
+
+# 8d) Duel Mate in hand generates summon actions via action generator
+duel_mate_hand_card = card(801, "Duel Mate Fighter", card_subtype=CardSubtype.DUEL_MATE, power=4000, cost=3)
+duel_mate_hand = HandCard(definition=duel_mate_hand_card, uid="dm-hand-1")
+mana_card = card(802, "Mana Filler", card_type=CardType.CREATURE, civs=(Civilization.FIRE,))
+state_8d = make_state(p0_hand=[duel_mate_hand], turn=2, phase=Phase.MAIN)
+# Add enough mana to pay for the card
+for i in range(3):
+    state_8d.players[0].mana_zone.append(ManaCard(definition=CardDefinition(
+        id=9000 + i, slug=f"mana_{i}", name=f"Mana {i}", cost=0, power=None,
+        card_type=CardType.CREATURE, card_subtype=CardSubtype.NONE,
+        civilizations=frozenset({Civilization.FIRE}), races=frozenset(["Mana"]),
+        keywords=frozenset(), effects=tuple(), evolution_source_races=frozenset(),
+        evolution_source_types=frozenset(), is_multiface=False, other_face_id=None,
+    )))
+actions_8d = _actions_for_hand_card(0, "dm-hand-1", duel_mate_hand_card, state_8d)
+summon_actions = [a for a in actions_8d if a.action_type == ActionType.SUMMON_CREATURE]
+check("8d: Duel Mate in hand generates summon actions",
+      len(summon_actions) > 0,
+      f"found {len(summon_actions)} summon actions")
+
+# 8e) Duel Mate without proper summon goes to hyperspatial via SBA
+duel_mate_creature_8e = make_creature(duel_mate_hand_card, controller=0, entered_turn=2)
+duel_mate_creature_8e.has_summoning_sickness = False  # not properly summoned
+state_8e = make_state(p0_battle=[duel_mate_creature_8e])
+_sba_duel_mate_cleanup(state_8e)
+battle_8e = len(state_8e.players[0].battle_zone)
+hyper_8e = len(state_8e.players[0].hyperspatial_zone)
+check("8e: Duel Mate without proper summon goes to hyperspatial",
+      battle_8e == 0 and hyper_8e >= 1,
+      f"battle={battle_8e}, hyperspatial={hyper_8e}")
+
+# 8f) Duel Mate with summoning sickness stays in battle zone
+duel_mate_creature_8f = make_creature(duel_mate_hand_card, controller=0, entered_turn=2)
+duel_mate_creature_8f.has_summoning_sickness = True  # properly summoned
+state_8f = make_state(p0_battle=[duel_mate_creature_8f])
+_sba_duel_mate_cleanup(state_8f)
+battle_8f = len(state_8f.players[0].battle_zone)
+hyper_8f = len(state_8f.players[0].hyperspatial_zone)
+check("8f: Duel Mate with summoning sickness stays in BZ",
+      battle_8f == 1 and hyper_8f == 0,
+      f"battle={battle_8f}, hyperspatial={hyper_8f}")
+
+# 8g) move_hand_to_hyperspatial moves card from hand to hyperspatial zone
+duel_mate_hand_g = HandCard(definition=duel_mate_hand_card, uid="dm-hand-g")
+state_8g = make_state(p0_hand=[duel_mate_hand_g])
+move_hand_to_hyperspatial(state_8g, 0, "dm-hand-g")
+hand_8g = len(state_8g.players[0].hand)
+hyper_8g = len(state_8g.players[0].hyperspatial_zone)
+check("8g: move_hand_to_hyperspatial moves card to hyperspatial zone",
+      hand_8g == 0 and hyper_8g == 1,
+      f"hand={hand_8g}, hyperspatial={hyper_8g}")
+
+# 8h) Duel Mate ends up in hyperspatial zone after hand-to-hyperspatial move
+check("8h: Duel Mate in hyperspatial zone has correct definition",
+      state_8g.players[0].hyperspatial_zone[0].definition.id == duel_mate_hand_card.id,
+      f"card id={state_8g.players[0].hyperspatial_zone[0].definition.id}")
+
+# 8i) Multiple Duel Mate cards in hand generate separate summon actions
+dm_card_1 = card(810, "Duel Mate Alpha", card_subtype=CardSubtype.DUEL_MATE, power=3000, cost=2)
+dm_card_2 = card(811, "Duel Mate Beta", card_subtype=CardSubtype.DUEL_MATE, power=5000, cost=4)
+dm_hand_1 = HandCard(definition=dm_card_1, uid="dm-multi-1")
+dm_hand_2 = HandCard(definition=dm_card_2, uid="dm-multi-2")
+state_8i = make_state(p0_hand=[dm_hand_1, dm_hand_2], turn=2, phase=Phase.MAIN)
+# Add 4 mana cards
+for i in range(4):
+    state_8i.players[0].mana_zone.append(ManaCard(definition=CardDefinition(
+        id=9100 + i, slug=f"mana_m{i}", name=f"ManaM{i}", cost=0, power=None,
+        card_type=CardType.CREATURE, card_subtype=CardSubtype.NONE,
+        civilizations=frozenset({Civilization.FIRE}), races=frozenset(["Mana"]),
+        keywords=frozenset(), effects=tuple(), evolution_source_races=frozenset(),
+        evolution_source_types=frozenset(), is_multiface=False, other_face_id=None,
+    )))
+actions_8i_1 = _actions_for_hand_card(0, "dm-multi-1", dm_card_1, state_8i)
+actions_8i_2 = _actions_for_hand_card(0, "dm-multi-2", dm_card_2, state_8i)
+summon_1 = [a for a in actions_8i_1 if a.action_type == ActionType.SUMMON_CREATURE]
+summon_2 = [a for a in actions_8i_2 if a.action_type == ActionType.SUMMON_CREATURE]
+check("8i: Multiple Duel Mate cards generate separate summon actions",
+      len(summon_1) > 0 and len(summon_2) > 0,
+      f"dm1_summons={len(summon_1)}, dm2_summons={len(summon_2)}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -637,7 +724,11 @@ check("12a: face=0 returns own power", chars_0["power"] == 3000)
 check("12a: face=0 returns own civilizations", chars_0["civilizations"] == frozenset({Civilization.WATER}))
 
 # 12b) get_twinpact_characteristics face=1 returns other face's characteristics
-tp_card.twinpact_other_face = {
+tp_card_other = card(1201, "Twinpact Dragon Face1", is_multiface=True, other_face_id=1200,
+                     power=6000, cost=7, civs=(Civilization.FIRE,),
+                     races=("Dragon",), keywords=(Keyword.DOUBLE_BREAKER,))
+# Use object.__setattr__ to set field on frozen dataclass
+object.__setattr__(tp_card, "twinpact_other_face", {
     "cost": 7,
     "power": 6000,
     "card_type": CardType.CREATURE,
@@ -645,7 +736,7 @@ tp_card.twinpact_other_face = {
     "civilizations": frozenset({Civilization.FIRE}),
     "races": frozenset({"Dragon"}),
     "keywords": frozenset({Keyword.DOUBLE_BREAKER}),
-}
+})
 chars_1 = get_twinpact_characteristics(tp_card, 1)
 check("12b: face=1 returns other face cost", chars_1["cost"] == 7,
       f"expected 7, got {chars_1['cost']}")
@@ -707,17 +798,15 @@ check("12c: Twinpact generates actions for both faces", len(tp_actions) >= 2,
       f"got {len(tp_actions)} actions")
 
 # 12d) Face 1 has different cost than face 0
-face0_actions = [a for a in tp_actions if dict(a.extra).get("twinpact_face") == 0]
-face1_actions = [a for a in tp_actions if dict(a.extra).get("twinpact_face") == 1]
+face0_actions = [a for a in tp_actions if a.twinpact_face == 0]
+face1_actions = [a for a in tp_actions if a.twinpact_face == 1]
 check("12d: face=0 actions exist", len(face0_actions) > 0)
 check("12d: face=1 actions exist", len(face1_actions) > 0)
 
-# 12e) Action stores twinpact_face parameter in extra
+# 12e) Action stores twinpact_face parameter
 sample_action = tp_actions[0]
-extra_dict = dict(sample_action.extra)
-check("12e: action has twinpact_face in extra", "twinpact_face" in extra_dict,
-      f"extra keys: {list(extra_dict.keys())}")
-check("12e: twinpact_face is 0 or 1", extra_dict["twinpact_face"] in (0, 1))
+check("12e: action has twinpact_face set", sample_action.twinpact_face in (0, 1),
+      f"twinpact_face={sample_action.twinpact_face}")
 
 # 12f) Non-Twinpact cards are unaffected by the dual-face logic
 normal_card_12f = card(1250, "Normal Beast", power=2000, cost=3)
@@ -732,8 +821,15 @@ from engine.action_executor import execute_action
 # Pick a face=1 action
 if face1_actions:
     act = face1_actions[0]
+    # Rebuild state and action together so card_uid matches
     exec_state = make_mana_state()
-    exec_state_copy = execute_action(exec_state, act)
+    exec_hand_uid = exec_state.players[0].hand[0].uid
+    # Rebuild the action with the correct card_uid from this state
+    act_with_uid = summon_creature(
+        act.player, exec_hand_uid, act.card_id, act.mana_used,
+        twinpact_face=act.twinpact_face,
+    )
+    exec_state_copy = execute_action(exec_state, act_with_uid)
     p0_creatures = exec_state_copy.players[0].battle_zone
     if p0_creatures:
         creature = p0_creatures[0]
