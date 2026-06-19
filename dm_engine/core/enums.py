@@ -70,6 +70,8 @@ class CardSubtype(Enum):
     ZEROM             = "zerom"            # rule 812 — double-sided ritual/creature
     DUEL_MATE         = "duel_mate"        # rule 820 — Duel Mate
     G_CASTLE          = "g_castle"         # rule 822 — G-Castle
+    HYPER_SOUL_X      = "hyper_soul_x"     # rule 818 — Hyper Soul X (STUB: not yet implemented)
+    WD_FIELD          = "wd_field"         # rule 819 — WD Field (STUB: not yet implemented)
 
 
 # ── Zones ─────────────────────────────────────────────────────────────────────
