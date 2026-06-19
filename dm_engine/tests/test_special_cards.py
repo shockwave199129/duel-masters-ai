@@ -34,8 +34,10 @@ from core.cards import (
     is_g_castle,
     is_hyper_soul_x,
     is_wd_field,
+    get_twinpact_characteristics,
 )
 from core.enums import (
+    ActionType,
     CardSubtype,
     CardType,
     Civilization,
@@ -45,7 +47,7 @@ from core.enums import (
 )
 from core.player_state import PlayerState
 from core.state import GameState, TurnInfo
-from core.zones import Creature, HandCard, ShieldCard
+from core.zones import Creature, HandCard, ManaCard, ShieldCard
 from engine.zone_mover import (
     flip_twinpact,
     flip_forbidden,
@@ -55,8 +57,11 @@ from engine.zone_mover import (
     move_hand_to_battle,
     move_shield_to_standby,
     move_standby_shield_to_hand,
+    fortify_g_castle_to_shield,
+    fortify_shield_with_castle,
 )
 from engine.sba_checker import check_state_based_actions
+from engine.action_generator import _actions_for_hand_card
 
 PASS = "✅"
 FAIL = "❌"
@@ -491,6 +496,86 @@ gy_9c = [g.died_from for g in state_9c.players[0].graveyard]
 check("9c: G-Castle broken from shield goes to graveyard",
       "g_castle" in str(gy_9c),
       f"graveyard died_from={gy_9c}")
+# 9d) G-Castle fortify action generation — G-Castle in hand generates fortify actions
+g_castle_hand_defn = card(902, "G-Castle Alpha", card_type=CardType.CASTLE,
+                          card_subtype=CardSubtype.G_CASTLE, civs=(Civilization.FIRE,), cost=1)
+g_castle_hand = HandCard(definition=g_castle_hand_defn)
+shield_9d = ShieldCard(definition=card(903, "Shield 9d", card_type=CardType.CREATURE))
+mana_9d = ManaCard(definition=card(904, "Mana 9d", civs=(Civilization.FIRE,)))
+state_9d = make_state(p0_hand=[g_castle_hand], p0_shields=[shield_9d])
+# Add mana directly (need 1 fire mana for cost=1)
+state_9d.players[0].mana_zone.append(mana_9d)
+actions_9d = _actions_for_hand_card(0, g_castle_hand.uid, g_castle_hand_defn, state_9d)
+fortify_actions_9d = [a for a in actions_9d if a.action_type == ActionType.FORTIFY_CASTLE]
+check("9d: G-Castle in hand generates fortify actions",
+      len(fortify_actions_9d) >= 1,
+      f"found {len(fortify_actions_9d)} fortify actions")
+
+# 9e) G-Castle can target a specific shield
+if fortify_actions_9d:
+    target_uids_9e = [a.target_uid for a in fortify_actions_9d]
+    check("9e: G-Castle fortify targets a specific shield",
+          shield_9d.uid in target_uids_9e,
+          f"targets={target_uids_9e}, shield_uid={shield_9d.uid}")
+else:
+    check("9e: G-Castle fortify targets a specific shield", False, "no fortify actions generated")
+
+# 9f) G-Castle cannot fortify without shields
+state_9f = make_state(p0_hand=[g_castle_hand])
+actions_9f = _actions_for_hand_card(0, g_castle_hand.uid, g_castle_hand_defn, state_9f)
+fortify_actions_9f = [a for a in actions_9f if a.action_type == ActionType.FORTIFY_CASTLE]
+check("9f: G-Castle cannot fortify without shields",
+      len(fortify_actions_9f) == 0,
+      f"found {len(fortify_actions_9f)} fortify actions (expected 0)")
+
+# 9g) G-Castle fortify places castle under shield
+shield_9g = ShieldCard(definition=card(905, "Shield 9g", card_type=CardType.CREATURE))
+state_9g = make_state(p0_hand=[g_castle_hand], p0_shields=[shield_9g])
+fortify_g_castle_to_shield(state_9g, 0, g_castle_hand.uid, shield_9g.uid)
+check("9g: G-Castle fortify removes from hand",
+      len(state_9g.players[0].hand) == 0)
+check("9g: G-Castle fortify attaches to shield",
+      len(shield_9g.fortified_castles) == 1 and shield_9g.fortified_castles[0].id == g_castle_hand_defn.id,
+      f"fortified_castles count={len(shield_9g.fortified_castles)}")
+
+# 9h) G-Castle fortified to shield — shield break sends fortified castle to graveyard
+g_castle_hand_9h_defn = card(906, "G-Castle Beta", card_type=CardType.CASTLE,
+                              card_subtype=CardSubtype.G_CASTLE, civs=(Civilization.FIRE,), cost=2)
+g_castle_hand_9h = HandCard(definition=g_castle_hand_9h_defn)
+shield_9h = ShieldCard(definition=card(907, "Shield 9h", card_type=CardType.CREATURE))
+state_9h = make_state(p0_hand=[g_castle_hand_9h], p0_shields=[shield_9h])
+fortify_g_castle_to_shield(state_9h, 0, g_castle_hand_9h.uid, shield_9h.uid)
+# Break the shield
+broken_9h = move_shield_to_standby(state_9h, 0, 0)
+# Move from standby to hand — fortified G-Castle should go to graveyard
+result_9h = move_standby_shield_to_hand(state_9h, 0, shield_9h.uid)
+gy_9h = [g.died_from for g in state_9h.players[0].graveyard]
+check("9h: Fortified G-Castle goes to graveyard on shield break",
+      "g_castle_shield_break" in gy_9h,
+      f"graveyard died_from={gy_9h}")
+
+# 9i) G-Castle SBA cleanup — SBA handles G-Castle in trigger queue
+g_castle_shield_9i = ShieldCard(definition=g_castle_card)
+state_9i = make_state(p0_shields=[g_castle_shield_9i])
+# Break shield to put it in trigger queue
+broken_9i = move_shield_to_standby(state_9i, 0, 0)
+# Run SBA — should detect G-Castle in queue and send to graveyard
+state_9i = check_state_based_actions(state_9i)
+gy_9i = [g.died_from for g in state_9i.players[0].graveyard]
+check("9i: SBA handles G-Castle in trigger queue",
+      "g_castle_shield_break" in gy_9i,
+      f"graveyard died_from={gy_9i}")
+
+# 9j) G-Castle fortification costs mana
+if fortify_actions_9d:
+    action_9j = fortify_actions_9d[0]
+    check("9j: G-Castle fortification has mana cost",
+          action_9j.mana_used is not None and len(action_9j.mana_used) >= 1,
+          f"mana_used={action_9j.mana_used}")
+else:
+    check("9j: G-Castle fortification has mana cost", False, "no fortify actions to check")
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Section 10: Hyper Soul X stub (Rule 818)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -534,6 +619,133 @@ check("11c: is_wd_field() returns False for NONE subtype",
 # 11d) CardDefinition has wd_field_faces field (default empty tuple)
 check("11d: CardDefinition.wd_field_faces defaults to empty tuple",
       normal_card.wd_field_faces == ())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Section 12: Twinpact Dual Cost & Characteristic Selection (Rule 810.3)
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n" + "─" * 60)
+print("  SECTION 12: TWINPACT DUAL COST (Rule 810.3)")
+print("─" * 60)
+
+# 12a) get_twinpact_characteristics face=0 returns own characteristics
+tp_card = card(1200, "Twinpact Dragon", is_multiface=True, other_face_id=1201,
+               power=3000, cost=4, civs=(Civilization.WATER,))
+chars_0 = get_twinpact_characteristics(tp_card, 0)
+check("12a: face=0 returns own cost", chars_0["cost"] == 4)
+check("12a: face=0 returns own power", chars_0["power"] == 3000)
+check("12a: face=0 returns own civilizations", chars_0["civilizations"] == frozenset({Civilization.WATER}))
+
+# 12b) get_twinpact_characteristics face=1 returns other face's characteristics
+tp_card.twinpact_other_face = {
+    "cost": 7,
+    "power": 6000,
+    "card_type": CardType.CREATURE,
+    "card_subtype": CardSubtype.NONE,
+    "civilizations": frozenset({Civilization.FIRE}),
+    "races": frozenset({"Dragon"}),
+    "keywords": frozenset({Keyword.DOUBLE_BREAKER}),
+}
+chars_1 = get_twinpact_characteristics(tp_card, 1)
+check("12b: face=1 returns other face cost", chars_1["cost"] == 7,
+      f"expected 7, got {chars_1['cost']}")
+check("12b: face=1 returns other face power", chars_1["power"] == 6000,
+      f"expected 6000, got {chars_1['power']}")
+check("12b: face=1 returns other face civilizations",
+      chars_1["civilizations"] == frozenset({Civilization.FIRE}))
+check("12b: face=1 returns other face keywords",
+      chars_1["keywords"] == frozenset({Keyword.DOUBLE_BREAKER}))
+
+# 12c) Twinpact generates actions for both faces
+from core.actions import Action as _Action
+from engine.action_generator import _actions_for_hand_card
+mana_card = card(1210, "Mana-Water", civs=(Civilization.WATER,), cost=0)
+mana_card_2 = card(1211, "Mana-Water2", civs=(Civilization.WATER,), cost=0)
+mana_card_3 = card(1212, "Mana-Water3", civs=(Civilization.WATER,), cost=0)
+mana_card_4 = card(1213, "Mana-Water4", civs=(Civilization.WATER,), cost=0)
+fire_mana = card(1214, "Mana-Fire", civs=(Civilization.FIRE,), cost=0)
+fire_mana_2 = card(1215, "Mana-Fire2", civs=(Civilization.FIRE,), cost=0)
+fire_mana_3 = card(1216, "Mana-Fire3", civs=(Civilization.FIRE,), cost=0)
+fire_mana_4 = card(1217, "Mana-Fire4", civs=(Civilization.FIRE,), cost=0)
+fire_mana_5 = card(1218, "Mana-Fire5", civs=(Civilization.FIRE,), cost=0)
+fire_mana_6 = card(1219, "Mana-Fire6", civs=(Civilization.FIRE,), cost=0)
+fire_mana_7 = card(1220, "Mana-Fire7", civs=(Civilization.FIRE,), cost=0)
+
+def make_mana_state():
+    filler = card(1299, "DeckFiller")
+    return GameState(
+        players=(
+            PlayerState(
+                player_index=0, player_name="P0", deck=[filler],
+                hand=[HandCard(definition=tp_card)],
+                mana_zone=[
+                    ManaCard(definition=mana_card),
+                    ManaCard(definition=mana_card_2),
+                    ManaCard(definition=mana_card_3),
+                    ManaCard(definition=mana_card_4),
+                    ManaCard(definition=fire_mana),
+                    ManaCard(definition=fire_mana_2),
+                    ManaCard(definition=fire_mana_3),
+                    ManaCard(definition=fire_mana_4),
+                    ManaCard(definition=fire_mana_5),
+                    ManaCard(definition=fire_mana_6),
+                    ManaCard(definition=fire_mana_7),
+                ],
+                shield_zone=[ShieldCard(definition=filler)],
+            ),
+            PlayerState(
+                player_index=1, player_name="P1", deck=[filler],
+            ),
+        ),
+        turn_info=TurnInfo(turn_number=2, active_player=0, phase=Phase.MAIN),
+    )
+
+tp_state = make_mana_state()
+hand_uid = tp_state.players[0].hand[0].uid
+tp_actions = _actions_for_hand_card(0, hand_uid, tp_card, tp_state)
+check("12c: Twinpact generates actions for both faces", len(tp_actions) >= 2,
+      f"got {len(tp_actions)} actions")
+
+# 12d) Face 1 has different cost than face 0
+face0_actions = [a for a in tp_actions if dict(a.extra).get("twinpact_face") == 0]
+face1_actions = [a for a in tp_actions if dict(a.extra).get("twinpact_face") == 1]
+check("12d: face=0 actions exist", len(face0_actions) > 0)
+check("12d: face=1 actions exist", len(face1_actions) > 0)
+
+# 12e) Action stores twinpact_face parameter in extra
+sample_action = tp_actions[0]
+extra_dict = dict(sample_action.extra)
+check("12e: action has twinpact_face in extra", "twinpact_face" in extra_dict,
+      f"extra keys: {list(extra_dict.keys())}")
+check("12e: twinpact_face is 0 or 1", extra_dict["twinpact_face"] in (0, 1))
+
+# 12f) Non-Twinpact cards are unaffected by the dual-face logic
+normal_card_12f = card(1250, "Normal Beast", power=2000, cost=3)
+normal_chars_0 = get_twinpact_characteristics(normal_card_12f, 0)
+normal_chars_1 = get_twinpact_characteristics(normal_card_12f, 1)
+check("12f: non-twinpact face=0 returns own cost", normal_chars_0["cost"] == 3)
+check("12f: non-twinpact face=1 returns own cost (no twinpact_other_face)",
+      normal_chars_1["cost"] == 3)
+
+# 12g) Action execution applies correct face characteristics
+from engine.action_executor import execute_action
+# Pick a face=1 action
+if face1_actions:
+    act = face1_actions[0]
+    exec_state = make_mana_state()
+    exec_state_copy = execute_action(exec_state, act)
+    p0_creatures = exec_state_copy.players[0].battle_zone
+    if p0_creatures:
+        creature = p0_creatures[0]
+        check("12g: creature has twinpact_face=1 after execution",
+              creature.twinpact_face == 1,
+              f"got {creature.twinpact_face}")
+        check("12g: creature has face 1 cost (7)",
+              creature.definition.cost == 7,
+              f"got cost {creature.definition.cost}")
+        check("12g: creature has face 1 power (6000)",
+              creature.definition.power == 6000,
+              f"got power {creature.definition.power}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

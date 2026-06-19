@@ -50,7 +50,7 @@ from core.enums import (
 )
 from core.state import GameState
 from core.zones import Creature, ManaCard
-from core.cards import CardDefinition
+from core.cards import CardDefinition, is_twinpact, get_twinpact_characteristics, is_duel_mate
 from core.actions import (
     Action,
     charge_mana, pass_charge,
@@ -432,13 +432,37 @@ def _actions_for_hand_card(
                     ))
             return actions
 
-        # ── Normal creature summon ─────────────────────────────────────────
-        effective_cost = _compute_effective_cost(defn, state, player)
-        combos = _get_mana_combinations(
-            p_state.mana_zone, effective_cost, defn.civilizations
-        )
-        for combo in combos:
-            actions.append(summon_creature(player, card_uid, defn.id, combo))
+        # ── Twinpact dual-face summon (Rule 810.3) ────────────────────────
+        if is_twinpact(defn):
+            for face in (0, 1):
+                chars = get_twinpact_characteristics(defn, face)
+                face_cost = chars["cost"]
+                face_civs = chars["civilizations"]
+                eff_cost = _compute_effective_cost(defn, state, player)
+                # Override cost for face 1 (face 0 uses card's own cost already)
+                if face == 1:
+                    eff_cost = max(0, face_cost + (eff_cost - defn.cost))
+                combos = _get_mana_combinations(
+                    p_state.mana_zone, eff_cost, face_civs
+                )
+                for combo in combos:
+                    actions.append(summon_creature(
+                        player, card_uid, defn.id, combo,
+                        extra=(("twinpact_face", face),),
+                    ))
+            return actions
+
+        # ── Duel Mate (rule 820) ────────────────────────────────────────────
+        # Duel Mate creatures are handled by the dedicated subtype branch
+        # below (after Zerom); skip them here so they get their own path.
+        if not is_duel_mate(defn):
+            # ── Normal creature summon ─────────────────────────────────────
+            effective_cost = _compute_effective_cost(defn, state, player)
+            combos = _get_mana_combinations(
+                p_state.mana_zone, effective_cost, defn.civilizations
+            )
+            for combo in combos:
+                actions.append(summon_creature(player, card_uid, defn.id, combo))
 
     # ── Spells ─────────────────────────────────────────────────────────────
     elif card_type == CardType.SPELL:
@@ -462,6 +486,15 @@ def _actions_for_hand_card(
         for combo in combos:
             actions.append(cast_spell(player, card_uid, defn.id, combo))
 
+
+    # ── Duel Mate creatures (rule 820) ──────────────────────────────────────
+    elif card_subtype == CardSubtype.DUEL_MATE:
+        effective_cost = _compute_effective_cost(defn, state, player)
+        combos = _get_mana_combinations(
+            p_state.mana_zone, effective_cost, defn.civilizations
+        )
+        for combo in combos:
+            actions.append(summon_creature(player, card_uid, defn.id, combo))
 
     # ── Cross Gear ─────────────────────────────────────────────────────────
     elif card_type == CardType.CROSS_GEAR:
@@ -1296,7 +1329,7 @@ def _compute_effective_cost(
                     modification -= 1
 
     # ── Global cost modifiers from active card effects ───────────────────
-    global_mod = state.global_effects.get_cost_modifiers(player, defn.card_id)
+    global_mod = state.global_effects.get_cost_modifiers(player, defn.id)
     modification += global_mod
 
     # ── Clamp to zero (cost cannot go negative) ────────────────────────
