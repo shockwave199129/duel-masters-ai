@@ -11,6 +11,8 @@ Sections:
   7. Dream Rare uniqueness SBA (Rule 817)
   8. Duel Mate cleanup SBA (Rule 820)
   9. G-Castle shield behavior (Rule 822)
+  10. Hyper Soul X stub (Rule 818)
+  11. WD Field stub (Rule 819)
 """
 
 import os
@@ -30,6 +32,8 @@ from core.cards import (
     is_dream_rare,
     is_duel_mate,
     is_g_castle,
+    is_hyper_soul_x,
+    is_wd_field,
 )
 from core.enums import (
     CardSubtype,
@@ -487,6 +491,49 @@ gy_9c = [g.died_from for g in state_9c.players[0].graveyard]
 check("9c: G-Castle broken from shield goes to graveyard",
       "g_castle" in str(gy_9c),
       f"graveyard died_from={gy_9c}")
+# ═══════════════════════════════════════════════════════════════════════════════
+# Section 10: Hyper Soul X stub (Rule 818)
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n── Section 10: Hyper Soul X stub (Rule 818) ──")
+
+# 10a) CardSubtype.HYPER_SOUL_X exists in enum
+check("10a: CardSubtype.HYPER_SOUL_X exists", CardSubtype.HYPER_SOUL_X is not None)
+
+# 10b) is_hyper_soul_x returns True for HYPER_SOUL_X subtype
+hsx_card = card(1000, "Hyper Soul Test", card_subtype=CardSubtype.HYPER_SOUL_X)
+check("10b: is_hyper_soul_x() returns True for HYPER_SOUL_X subtype",
+      is_hyper_soul_x(hsx_card) == True)
+
+# 10c) is_hyper_soul_x returns False for non-HYPER_SOUL_X subtype
+normal_card = card(1001, "Normal Creature", card_subtype=CardSubtype.NONE)
+check("10c: is_hyper_soul_x() returns False for NONE subtype",
+      is_hyper_soul_x(normal_card) == False)
+
+# 10d) CardDefinition has hyper_soul_abilities field (default empty list)
+check("10d: CardDefinition.hyper_soul_abilities defaults to empty list",
+      len(normal_card.hyper_soul_abilities) == 0)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Section 11: WD Field stub (Rule 819)
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n── Section 11: WD Field stub (Rule 819) ──")
+
+# 11a) CardSubtype.WD_FIELD exists in enum
+check("11a: CardSubtype.WD_FIELD exists", CardSubtype.WD_FIELD is not None)
+
+# 11b) is_wd_field returns True for WD_FIELD subtype
+wdf_card = card(1100, "WD Field Test", card_subtype=CardSubtype.WD_FIELD)
+check("11b: is_wd_field() returns True for WD_FIELD subtype",
+      is_wd_field(wdf_card) == True)
+
+# 11c) is_wd_field returns False for non-WD_FIELD subtype
+check("11c: is_wd_field() returns False for NONE subtype",
+      is_wd_field(normal_card) == False)
+
+# 11d) CardDefinition has wd_field_faces field (default empty tuple)
+check("11d: CardDefinition.wd_field_faces defaults to empty tuple",
+      normal_card.wd_field_faces == ())
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
