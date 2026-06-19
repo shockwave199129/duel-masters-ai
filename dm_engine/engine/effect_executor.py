@@ -208,6 +208,12 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
         _do_twinpact_flip(s, trigger)
     elif action == EffectAction.FORBIDDEN_FLIP:
         _do_forbidden_flip(s, trigger)
+    # ── Forbidden Release (Rule 809) ──────────────────────────────────────────
+    elif action == EffectAction.FORBIDDEN_RELEASE:
+        _do_forbidden_release(s, controller, trigger)
+    # ── NEO Evolution (Rule 802) ──────────────────────────────────────────────
+    elif action == EffectAction.NEO_EVOLVE:
+        _do_neo_evolve(s, controller, trigger)
     # ── Win/Loss by card effect (Rule 104.2c) ────────────────────────────────
     elif action == EffectAction.WIN_CONDITION:
         _do_win_by_effect(s, controller, trigger)
@@ -863,3 +869,63 @@ def _do_lose_by_effect(state: GameState, controller: int, trigger: PendingTrigge
     """
     opponent = 1 - controller
     state.game_result = ("win", opponent)
+
+
+def _do_forbidden_release(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle FORBIDDEN_RELEASE effect (Rule 809).
+    
+    A Forbidden card in hand is flipped and summoned to the battle zone.
+    The trigger data should contain the hand card's uid.
+    """
+    data = _trigger_data(trigger)
+    hand_uid = data.get("hand_uid") or data.get("source_uid")
+    if not hand_uid:
+        return
+    
+    # Find the card in hand
+    p_state = state.players[controller]
+    hand_card = None
+    for hc in p_state.hand:
+        if hc.uid == hand_uid:
+            hand_card = hc
+            break
+    if hand_card is None:
+        return
+    
+    # Remove from hand, flip, and place in battle zone
+    p_state.hand.remove(hand_card)
+    creature = move_hand_to_battle(
+        state, controller, hand_card.uid, hand_card.definition.id,
+        is_forbidden_release=True,
+    )
+    if creature:
+        flip_forbidden(creature)
+
+
+def _do_neo_evolve(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle NEO_EVOLVE effect (Rule 802).
+    
+    A NEO creature in the battle zone activates its evolution ability
+    to place a new evolution stack entry (evolve in place).
+    """
+    data = _trigger_data(trigger)
+    creature_uid = data.get("source_uid") or data.get("creature_uid")
+    if not creature_uid:
+        return
+    
+    found = _find_creature(state, creature_uid)
+    if not found:
+        return
+    _, creature = found
+    
+    # Add a new evolution stack entry from hand
+    p_state = state.players[controller]
+    evolve_card_uid = data.get("evolve_card_uid")
+    if evolve_card_uid:
+        for hc in p_state.hand:
+            if hc.uid == evolve_card_uid:
+                p_state.hand.remove(hc)
+                creature.evolution_stack.append(hc.definition)
+                break

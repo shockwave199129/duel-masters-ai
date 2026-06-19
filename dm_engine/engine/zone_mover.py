@@ -252,11 +252,33 @@ def move_battle_to_graveyard(
             died_on_turn=state.turn_number,
         )
 
-    # ── Legacy hardcoded replacement checks (Psychic Release / Dragon Evasion) ──
+    # ── Legacy hardcoded replacement checks (Psychic Release / Dragon Evasion / G-NEO) ──
     # These remain for backward compatibility with temp_flag-driven cards.
-    # If the creature has such an ability, it flips to lower-cost face and stays in BZ
-    # instead of leaving. The caller is responsible for providing the lower-face definition
-    # via a temp_flag; here we just signal that the replacement was applied.
+    # G-NEO all-leave replacement (rule 803.2): when a G-NEO creature with
+    # placed cards leaves BZ, ALL placed cards leave instead of just the top card.
+    if should_apply_gneo_all_leave_replacement(creature):
+        # Move the entire evolution stack to graveyard
+        creature.temp_flags["_replacement_already_applied"] = True
+        # Move underlying cards first (they leave as cards, not creatures)
+        for entry in creature.evolution_stack:
+            state.players[player].graveyard.insert(0, GraveyardCard(
+                definition=entry.definition,
+                uid=entry.uid if hasattr(entry, 'uid') else creature.uid,
+                died_from=f"{reason}_gneo_all_leave",
+                died_on_turn=state.turn_number,
+            ))
+        # Move the top card to graveyard
+        creature.remove_static_effects(state)
+        state.players[player].battle_zone.remove(creature)
+        graveyard_card = GraveyardCard(
+            definition=creature.definition,
+            uid=creature.uid,
+            died_from=f"{reason}_gneo_all_leave",
+            died_on_turn=state.turn_number,
+        )
+        state.players[player].graveyard.insert(0, graveyard_card)
+        return graveyard_card
+
     if should_apply_psychic_release(creature) or should_apply_dragon_evasion(creature):
         # Mark replacement applied — actual flip is handled by the caller via the
         # apply_psychic_release / apply_dragon_evasion helpers.
