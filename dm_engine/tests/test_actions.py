@@ -458,7 +458,7 @@ check("actions_equal: diff mana order",   not actions_equal(m1, m3))
 print("\n── 11. ACTION_TYPE_INDEX completeness ──────────────────────")
 # ═══════════════════════════════════════════════════════════════════
 
-check("ACTION_TYPE_INDEX has 26 entries", NUM_ACTION_TYPES == 26)
+check("ACTION_TYPE_INDEX has 27 entries", NUM_ACTION_TYPES == 27)
 check("CHARGE_MANA in index",      ActionType.CHARGE_MANA in ACTION_TYPE_INDEX)
 check("SUMMON_CREATURE in index",  ActionType.SUMMON_CREATURE in ACTION_TYPE_INDEX)
 check("ATTACK_PLAYER in index",    ActionType.ATTACK_PLAYER in ACTION_TYPE_INDEX)

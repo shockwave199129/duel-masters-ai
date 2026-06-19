@@ -28,10 +28,13 @@ STOP_REQUESTED = Event()
 DEFAULT_DECK_JSON = PROJECT_ROOT / "dm_engine" / "decks" / "prebuilt_game.json"
 DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 DEFAULT_OPENAI_MODEL = "gpt-5-nano"
+DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b"
 DEFAULT_OLLAMA_MODEL = "nemotron-3-nano:4b"
+DEFAULT_LOCAL_HF_MODEL = "lfm25-jp-duelmasters-final"
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_OPENAI_MAX_TOKENS = 20000
+DEFAULT_NVIDIA_MAX_TOKENS = 16384
 
 
 def _handle_signal(sig, frame):
@@ -84,14 +87,20 @@ def _default_api_key(provider: str) -> str | None:
         return os.getenv("OPENAI_API_KEY")
     if provider == "openrouter":
         return os.getenv("OPENROUTER_API_KEY")
+    if provider == "nvidia":
+        return os.getenv("NVIDIA_API_KEY") or os.getenv("NVAPI_KEY")
     return None
 
 
 def _default_model(provider: str) -> str:
     if provider == "openai":
         return os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
+    if provider == "nvidia":
+        return os.getenv("NVIDIA_MODEL", DEFAULT_NVIDIA_MODEL)
     if provider == "ollama":
         return os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+    if provider == "local-hf":
+        return os.getenv("LOCAL_HF_MODEL", DEFAULT_LOCAL_HF_MODEL)
     return os.getenv("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL)
 
 
@@ -112,7 +121,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--llm-provider",
-        choices=["openrouter", "openai", "ollama"],
+        choices=["openrouter", "openai", "ollama", "local-hf", "nvidia"],
         default=os.getenv("LLM_PROVIDER", "openrouter"),
         help="LLM provider to use for effect parsing",
     )
@@ -124,7 +133,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model",
         default=os.getenv("LLM_MODEL"),
-        help="Model for effect parsing",
+        help="Model for effect parsing; for local-hf this is the LoRA adapter folder",
     )
     parser.add_argument(
         "--cards-per-call",
@@ -149,6 +158,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=int(os.getenv("LLM_MAX_TOKENS", str(DEFAULT_LLM_MAX_TOKENS))),
         help="Maximum output/completion tokens requested from the provider",
+    )
+    parser.add_argument(
+        "--local-hf-timeout",
+        type=float,
+        default=float(os.getenv("LOCAL_HF_TIMEOUT", "3600")),
+        help="Maximum generation seconds per card when --llm-provider=local-hf",
     )
     parser.add_argument(
         "--ollama-host",
@@ -208,6 +223,12 @@ def main() -> None:
         and not os.getenv("LLM_MAX_TOKENS")
     ):
         args.max_tokens = DEFAULT_OPENAI_MAX_TOKENS
+    if (
+        args.llm_provider == "nvidia"
+        and args.max_tokens == DEFAULT_LLM_MAX_TOKENS
+        and not os.getenv("LLM_MAX_TOKENS")
+    ):
+        args.max_tokens = DEFAULT_NVIDIA_MAX_TOKENS
 
     slugs = _read_prebuilt_slugs(args.deck_json)
     missing = find_missing_card_slugs(args.dsn, slugs)
@@ -237,13 +258,14 @@ def main() -> None:
         ),
         retries=args.llm_retries,
         max_tokens=args.max_tokens,
+        local_hf_timeout=args.local_hf_timeout,
         should_stop=STOP_REQUESTED.is_set,
     )
     logger.info(
-        "Prebuilt deck parsing done: %s parsed, %s already parsed, %s skipped, %s errors, "
+        "Prebuilt deck parsing done: %s parsed, %s parsed or missing raw text, %s skipped, %s errors, "
         "tokens prompt=%s completion=%s total=%s",
         counts["parsed"],
-        counts["already_parsed"],
+        counts.get("parsed_or_missing_raw_text", counts["already_parsed"]),
         counts["skipped"],
         counts["errors"],
         counts["prompt_tokens"],

@@ -16,7 +16,7 @@ from core.cards import CardDefinition, DeckDefinition
 from core.enums import CardSubtype, CardType, Civilization, Keyword
 from core.initializer import initialize_game
 from core.state import GameState
-from core.zones import Creature
+from core.zones import Creature, HyperspatialCard, _new_uid
 
 
 @dataclass(frozen=True)
@@ -276,7 +276,7 @@ def _validate_copy_limit(cards: list[CardDefinition], limit: int, zone_name: str
 def _apply_extra_zones(state: GameState, player: int, spec: PrebuiltDeckSpec) -> None:
     p_state = state.players[player]
     p_state.hyperspatial_zone = [
-        Creature(definition=defn, controller=player, owner=player, has_summoning_sickness=False)
+        HyperspatialCard(definition=defn, face=0, uid=_new_uid())
         for defn in spec.hyperspatial
     ]
     p_state.ultra_gr_zone = list(spec.ultra_gr)

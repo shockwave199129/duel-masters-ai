@@ -6,6 +6,7 @@ Pipeline levels:
   Level 1 — Crawl set-list pages → discover all set URLs
   Level 2 — Crawl each set page  → discover card URLs for that set
   Level 3 — Scrape each card URL → parse + persist card data
+  Level 3.5 — Link multiface / God / Psychic Super cards (wiki templates → card_relations)
   Level 4 — LLM parse            → convert raw abilities to structured effects
 
 All state is persisted in PostgreSQL + a local JSON checkpoint so the pipeline
@@ -69,6 +70,7 @@ from scripts.effect_parser import parse_pending_cards
 from scripts.rules_context import RulesContextConfig
 from scripts.cf_cookies import apply_cf_cookies, close_browser_context
 from scripts.repair_cards import repair_cards_from_raw_text
+from scripts.populate_card_rules import populate_card_rules
 
 logging.basicConfig(
     level=logging.INFO,
@@ -144,14 +146,22 @@ def _init_db(dsn: str):
 
 # ── Pipeline stages ────────────────────────────────────────────────────────────
 
-def stage_discover_sets(sm: StateManager, series: str):
+def stage_discover_sets(sm: StateManager, series: str, use_api: bool = False):
     """Level 1: Crawl set-list pages and persist all set URLs."""
     logger.info("=" * 60)
-    logger.info("STAGE 1: Discovering sets")
+    logger.info("STAGE 1: Discovering sets%s", " (API)" if use_api else "")
     logger.info("=" * 60)
 
-    session = _make_session()
-    sets = crawl_sets_list(series=series, session=session)
+    if use_api:
+        from scripts.api_client import make_api_session
+        from scripts.api_sets import discover_sets
+
+        session = make_api_session()
+        sets = discover_sets(session=session, series=series)
+    else:
+        session = _make_session()
+        sets = crawl_sets_list(series=series, session=session)
+
     if not sets:
         logger.error("No sets discovered — check network and wiki structure")
         return
@@ -161,7 +171,7 @@ def stage_discover_sets(sm: StateManager, series: str):
     logger.info(f"Discovered and saved {len(sets)} sets")
 
 
-def stage_discover_cards(sm: StateManager):
+def stage_discover_cards(sm: StateManager, use_api: bool = False):
     """Level 2: For each pending set, crawl its set page and collect card URLs."""
     pending = sm.pending_sets()
     if not pending:
@@ -169,10 +179,21 @@ def stage_discover_cards(sm: StateManager):
         return
 
     logger.info("=" * 60)
-    logger.info(f"STAGE 2: Discovering card URLs from {len(pending)} sets")
+    logger.info(
+        "STAGE 2: Discovering card URLs from %s sets%s",
+        len(pending),
+        " (API)" if use_api else "",
+    )
     logger.info("=" * 60)
 
-    session = _make_session()
+    if use_api:
+        from scripts.api_client import db_upsert_set, make_api_session
+        from scripts.api_set_page import crawl_set_page_api
+
+        session = make_api_session()
+    else:
+        session = _make_session()
+
     done_count = 0
 
     for set_state in pending:
@@ -183,11 +204,33 @@ def stage_discover_cards(sm: StateManager):
             f"  [{done_count+1}/{len(pending)}] {set_state.set_code} — {set_state.set_name}")
 
         try:
-            card_dicts = crawl_set_page(
-                set_url=set_state.set_url,
-                set_code=set_state.set_code,
-                session=session,
-            )
+            if use_api:
+                conn = psycopg2.connect(sm.dsn)
+                try:
+                    db_upsert_set(
+                        conn,
+                        {
+                            "set_code": set_state.set_code,
+                            "set_name": set_state.set_name,
+                            "set_url": set_state.set_url,
+                            "series": set_state.series,
+                        },
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+                card_dicts = crawl_set_page_api(
+                    set_url=set_state.set_url,
+                    set_code=set_state.set_code,
+                    session=session,
+                )
+            else:
+                card_dicts = crawl_set_page(
+                    set_url=set_state.set_url,
+                    set_code=set_state.set_code,
+                    session=session,
+                )
 
             if not card_dicts:
                 logger.warning(
@@ -205,13 +248,16 @@ def stage_discover_cards(sm: StateManager):
 
         sm.save()
         done_count += 1
-        _polite_delay(2, 5)
+        if not use_api:
+            _polite_delay(2, 5)
+        else:
+            _polite_delay(0.2, 0.5)
 
     logger.info(
         f"Set discovery done. Total card URLs: {len(sm.pending_cards()) + sm._state.scraped_cards}")
 
 
-def stage_scrape_cards(sm: StateManager, dsn: str):
+def stage_scrape_cards(sm: StateManager, dsn: str, use_api: bool = False):
     """Level 3: Scrape each pending card URL and persist to DB."""
     pending = sm.pending_cards()
     if not pending:
@@ -219,10 +265,21 @@ def stage_scrape_cards(sm: StateManager, dsn: str):
         return
 
     logger.info("=" * 60)
-    logger.info(f"STAGE 3: Scraping {len(pending)} card pages")
+    logger.info(
+        "STAGE 3: Scraping %s card pages%s",
+        len(pending),
+        " (API)" if use_api else "",
+    )
     logger.info("=" * 60)
 
-    session = _make_session()
+    if use_api:
+        from scripts.api_client import make_api_session
+        from scripts.api_scraper import scrape_card_url_api
+
+        session = make_api_session()
+    else:
+        session = _make_session()
+
     done = 0
     errors = 0
 
@@ -238,8 +295,20 @@ def stage_scrape_cards(sm: StateManager, dsn: str):
                 f"  [{done+errors+1}/{len(pending)}] {card_state.card_name or url}")
 
             try:
-                card = scrape_card(url=url, set_code=set_code,
-                                   dsn=dsn, session=session)
+                if use_api:
+                    card = scrape_card_url_api(
+                        url=url,
+                        set_code=set_code,
+                        dsn=dsn,
+                        session=session,
+                    )
+                else:
+                    card = scrape_card(
+                        url=url,
+                        set_code=set_code,
+                        dsn=dsn,
+                        session=session,
+                    )
                 if not card:
                     raise ValueError("Card scrape returned None")
 
@@ -256,13 +325,35 @@ def stage_scrape_cards(sm: StateManager, dsn: str):
             if (done + errors) % 50 == 0:
                 sm.save()
 
-            _polite_delay(1.5, 3.5)
+            if use_api:
+                _polite_delay(0.1, 0.3)
+            else:
+                _polite_delay(1.5, 3.5)
 
     finally:
-        close_browser_context()
+        if not use_api:
+            close_browser_context()
         sm.save()
 
     logger.info(f"Scraping done. ✓ {done} scraped, ✗ {errors} errors")
+
+
+def stage_link_cards(sm: StateManager, dsn: str, use_api: bool = True):
+    """Level 3.5: Link multiface / God / Psychic Super cards from wiki templates."""
+    logger.info("=" * 60)
+    logger.info("STAGE 3.5: Linking multiface / God / Psychic Super cards")
+    logger.info("=" * 60)
+
+    from scripts.link_cards import run_link_pass
+
+    stats = run_link_pass(dsn, use_api=use_api)
+    logger.info(
+        "Linking done. scanned=%s relations=%s other_face=%s multiface=%s",
+        stats["cards_scanned"],
+        stats["relations_written"],
+        stats["other_face_linked"],
+        stats["multiface_marked"],
+    )
 
 
 def stage_parse_effects(
@@ -281,6 +372,8 @@ def stage_parse_effects(
     llm_retries: int,
     delay_between: float,
     max_tokens: int,
+    local_hf_timeout: float,
+    parallel_calls: int | None = None,
 ):
     """Level 4: LLM-parse abilities for all scraped cards."""
     logger.info("=" * 60)
@@ -304,6 +397,8 @@ def stage_parse_effects(
         ),
         retries=llm_retries,
         max_tokens=max_tokens,
+        local_hf_timeout=local_hf_timeout,
+        parallel_calls=parallel_calls,
         should_stop=lambda: _STOP_REQUESTED,
     )
     logger.info(
@@ -325,16 +420,31 @@ def cmd_run(args):
     sm = StateManager(dsn=args.dsn, state_dir=args.state_dir)
     sm.load()
 
-    if not sm._state.sets:
-        stage_discover_sets(sm, args.series)
+    if args.from_start:
+        logger.info(
+            "Re-queueing pipeline (--from-start): no deletes, upsert-only refresh "
+            "from stage 1"
+        )
+        counts = sm.requeue_from_start()
+        logger.info(
+            "Re-queue complete: %s sets pending, %s card URLs pending",
+            counts["sets_reset"],
+            counts["card_urls_requeued"],
+        )
+
+    if args.from_start or not sm._state.sets:
+        stage_discover_sets(sm, args.series, use_api=args.use_api)
 
     if not _STOP_REQUESTED:
-        stage_discover_cards(sm)
+        stage_discover_cards(sm, use_api=args.use_api)
 
     if not _STOP_REQUESTED:
-        stage_scrape_cards(sm, args.dsn)
+        stage_scrape_cards(sm, args.dsn, use_api=args.use_api)
 
-    if not _STOP_REQUESTED and (args.llm_provider == "ollama" or args.api_key):
+    if not _STOP_REQUESTED:
+        stage_link_cards(sm, args.dsn, use_api=args.use_api)
+
+    if not _STOP_REQUESTED and (args.llm_provider in ("ollama", "local-hf") or args.api_key):
         stage_parse_effects(
             sm, args.dsn, args.api_key, args.batch_size, args.cards_per_call, args.model,
             args.base_url, args.llm_provider, args.ollama_host,
@@ -344,6 +454,8 @@ def cmd_run(args):
             args.llm_retries,
             args.delay_between,
             args.max_tokens,
+            args.local_hf_timeout,
+            args.parallel_calls,
         )
     elif not args.api_key:
         logger.info("No --api-key provided, skipping effect parsing")
@@ -355,7 +467,7 @@ def cmd_discover_sets(args):
     _init_db(args.dsn)
     sm = StateManager(dsn=args.dsn, state_dir=args.state_dir)
     sm.load()
-    stage_discover_sets(sm, args.series)
+    stage_discover_sets(sm, args.series, use_api=args.use_api)
     sm.print_summary()
 
 
@@ -363,7 +475,7 @@ def cmd_discover_cards(args):
     _init_db(args.dsn)
     sm = StateManager(dsn=args.dsn, state_dir=args.state_dir)
     sm.load()
-    stage_discover_cards(sm)
+    stage_discover_cards(sm, use_api=args.use_api)
     sm.print_summary()
 
 
@@ -371,12 +483,44 @@ def cmd_scrape_cards(args):
     _init_db(args.dsn)
     sm = StateManager(dsn=args.dsn, state_dir=args.state_dir)
     sm.load()
-    stage_scrape_cards(sm, args.dsn)
+    stage_scrape_cards(sm, args.dsn, use_api=args.use_api)
     sm.print_summary()
 
 
+def cmd_link_cards(args):
+    _init_db(args.dsn)
+    stage_link_cards(
+        StateManager(dsn=args.dsn, state_dir=args.state_dir),
+        args.dsn,
+        use_api=args.use_api,
+    )
+
+
+def cmd_populate_card_rules(args):
+    _init_db(args.dsn)
+    counts = populate_card_rules(
+        args.dsn,
+        skip_rulings=args.skip_rulings,
+        skip_links=args.skip_links,
+        limit=args.limit,
+        dry_run=args.dry_run,
+        clear=args.clear,
+    )
+    logger.info(
+        "Populate card rules: cards=%s ruling_pages=%s cards_with_rulings=%s "
+        "rulings_inserted=%s cards_with_links=%s links_inserted=%s%s",
+        counts.cards_scanned,
+        counts.ruling_pages_found,
+        counts.cards_with_rulings,
+        counts.rulings_inserted,
+        counts.cards_with_links,
+        counts.links_inserted,
+        " (dry-run)" if args.dry_run else "",
+    )
+
+
 def cmd_parse_effects(args):
-    if args.llm_provider in ("openrouter", "openai") and not args.api_key:
+    if args.llm_provider in ("openrouter", "openai", "nvidia") and not args.api_key:
         logger.error("--api-key required for parse-effects when --llm-provider=%s", args.llm_provider)
         sys.exit(1)
     sm = StateManager(dsn=args.dsn, state_dir=args.state_dir)
@@ -390,6 +534,8 @@ def cmd_parse_effects(args):
         args.llm_retries,
         args.delay_between,
         args.max_tokens,
+        args.local_hf_timeout,
+        args.parallel_calls,
     )
     sm.print_summary()
 
@@ -418,8 +564,13 @@ def cmd_single(args):
     for ab in card.abilities:
         logger.info(f"    {ab}")
 
-    if (args.llm_provider == "ollama" or args.api_key) and card.abilities:
-        from scripts.effect_parser import _parse_with_llm
+    if (args.llm_provider in ("ollama", "local-hf") or args.api_key) and card.abilities:
+        from scripts.effect_parser import (
+            DEFAULT_NVIDIA_BASE_URL,
+            _ClientContext,
+            _LocalHfClient,
+            _parse_with_llm,
+        )
         from openai import OpenAI
         from openrouter import OpenRouter
         rules_context = ""
@@ -438,12 +589,18 @@ def cmd_single(args):
         if args.llm_provider == "openrouter":
             client_context = OpenRouter(api_key=args.api_key)
         elif args.llm_provider == "openai":
-            class _OpenAIClient:
-                def __enter__(self):
-                    return OpenAI(api_key=args.api_key)
-                def __exit__(self, exc_type, exc, traceback):
-                    return False
-            client_context = _OpenAIClient()
+            client_context = _ClientContext(OpenAI(api_key=args.api_key))
+        elif args.llm_provider == "nvidia":
+            client_context = _ClientContext(
+                OpenAI(
+                    api_key=args.api_key,
+                    base_url=args.base_url
+                    if args.base_url != DEFAULT_OPENROUTER_BASE_URL
+                    else DEFAULT_NVIDIA_BASE_URL,
+                )
+            )
+        elif args.llm_provider == "local-hf":
+            client_context = _LocalHfClient(args.model, generation_timeout=args.local_hf_timeout)
         else:
             client_context = None
         if client_context is None:
@@ -598,16 +755,25 @@ def cmd_reset_card_data(args):
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 DEFAULT_OPENAI_MODEL = "gpt-5-nano"
+DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b"
 DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_OPENAI_MAX_TOKENS = 50000
+DEFAULT_NVIDIA_MAX_TOKENS = 16384
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "nemotron-3-nano:4b"
+DEFAULT_LOCAL_HF_MODEL = "lfm25-jp-duelmasters-final"
+
+
+def _optional_int_env(name: str) -> int | None:
+    value = os.getenv(name)
+    return int(value) if value else None
 
 
 def _add_llm_parse_args(subparser):
     subparser.add_argument(
         "--llm-provider",
-        choices=["openrouter", "openai", "ollama"],
+        choices=["openrouter", "openai", "ollama", "local-hf", "nvidia"],
         default=os.getenv("LLM_PROVIDER", "openrouter"),
         help="LLM provider to use for effect parsing",
     )
@@ -624,7 +790,7 @@ def _add_llm_parse_args(subparser):
     subparser.add_argument(
         "--model",
         default=os.getenv("LLM_MODEL") or os.getenv("OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL,
-        help="Model for effect parsing",
+        help="Model for effect parsing; for local-hf this is the LoRA adapter folder",
     )
     subparser.add_argument(
         "--ollama-host",
@@ -666,14 +832,42 @@ def _add_llm_parse_args(subparser):
     subparser.add_argument(
         "--cards-per-call",
         type=int,
-        default=int(os.getenv("LLM_CARDS_PER_CALL", "2")),
-        help="How many cards to parse in one OpenRouter request",
+        default=int(os.getenv("LLM_CARDS_PER_CALL", "3")),
+        help="How many cards to parse in one LLM request (default 3)",
+    )
+    subparser.add_argument(
+        "--parallel-calls",
+        type=int,
+        default=_optional_int_env("LLM_PARALLEL_CALLS"),
+        dest="parallel_calls",
+        help=(
+            "How many LLM requests to keep in flight. "
+            "Defaults to 2 for --llm-provider=nvidia, 1 for all others. "
+            "Env: LLM_PARALLEL_CALLS"
+        ),
     )
     subparser.add_argument(
         "--max-tokens",
         type=int,
         default=int(os.getenv("LLM_MAX_TOKENS", str(DEFAULT_LLM_MAX_TOKENS))),
-        help="Maximum output/completion tokens requested from the LLM provider",
+        help=(
+            "Maximum output/completion tokens per LLM request. "
+            "With --cards-per-call=3, each 3-card batch gets this full budget."
+        ),
+    )
+    subparser.add_argument(
+        "--local-hf-timeout",
+        type=float,
+        default=float(os.getenv("LOCAL_HF_TIMEOUT", "3600")),
+        help="Maximum generation seconds per card when --llm-provider=local-hf",
+    )
+
+
+def _add_use_api_arg(subparser):
+    subparser.add_argument(
+        "--use-api",
+        action="store_true",
+        help="Use MediaWiki API instead of HTML scraping (faster, no Playwright)",
     )
 
 
@@ -700,6 +894,15 @@ def main():
     p_run.add_argument("--series", default="both",
                        choices=["OCG", "TCG", "both"])
     p_run.add_argument("--batch-size", type=int, default=100)
+    p_run.add_argument(
+        "--from-start",
+        action="store_true",
+        help=(
+            "Re-run all stages from the beginning without deleting data "
+            "(upsert sets, URLs, cards, and effects)"
+        ),
+    )
+    _add_use_api_arg(p_run)
     _add_llm_parse_args(p_run)
 
     # discover-sets
@@ -707,14 +910,37 @@ def main():
         "discover-sets", parents=[shared], help="Level 1: find all sets")
     p_ds.add_argument("--series", default="OCG",
                       choices=["OCG", "TCG", "both"])
+    _add_use_api_arg(p_ds)
 
     # discover-cards
-    sub.add_parser("discover-cards",
-                   parents=[shared], help="Level 2: find card URLs from sets")
+    p_dc = sub.add_parser(
+        "discover-cards", parents=[shared], help="Level 2: find card URLs from sets")
+    _add_use_api_arg(p_dc)
 
     # scrape-cards
-    sub.add_parser(
+    p_sc = sub.add_parser(
         "scrape-cards", parents=[shared], help="Level 3: scrape all pending card pages")
+    _add_use_api_arg(p_sc)
+
+    # link-cards
+    p_lc = sub.add_parser(
+        "link-cards",
+        parents=[shared],
+        help="Level 3.5: link multiface / God / Psychic Super cards",
+    )
+    _add_use_api_arg(p_lc)
+
+    # populate-card-rules
+    p_pcr = sub.add_parser(
+        "populate-card-rules",
+        parents=[shared],
+        help="Backfill card_rulings and dm_card_rule_links",
+    )
+    p_pcr.add_argument("--limit", type=int, default=None)
+    p_pcr.add_argument("--skip-rulings", action="store_true")
+    p_pcr.add_argument("--skip-links", action="store_true")
+    p_pcr.add_argument("--dry-run", action="store_true")
+    p_pcr.add_argument("--clear", action="store_true")
 
     # parse-effects
     p_pe = sub.add_parser(
@@ -773,6 +999,8 @@ def main():
             args.api_key = os.getenv("OPENAI_API_KEY")
         elif args.llm_provider == "openrouter":
             args.api_key = os.getenv("OPENROUTER_API_KEY")
+        elif args.llm_provider == "nvidia":
+            args.api_key = os.getenv("NVIDIA_API_KEY") or os.getenv("NVAPI_KEY")
     openrouter_default_model = os.getenv("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL)
     if (
         hasattr(args, "llm_provider")
@@ -790,11 +1018,38 @@ def main():
         args.model = os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
     if (
         hasattr(args, "llm_provider")
+        and args.llm_provider == "nvidia"
+        and args.model == openrouter_default_model
+        and not os.getenv("LLM_MODEL")
+    ):
+        args.model = os.getenv("NVIDIA_MODEL", DEFAULT_NVIDIA_MODEL)
+    if (
+        hasattr(args, "llm_provider")
+        and args.llm_provider == "nvidia"
+        and (not args.base_url or "openrouter.ai" in args.base_url)
+    ):
+        args.base_url = os.getenv("NVIDIA_BASE_URL", DEFAULT_NVIDIA_BASE_URL)
+    if (
+        hasattr(args, "llm_provider")
+        and args.llm_provider == "local-hf"
+        and args.model == openrouter_default_model
+        and not os.getenv("LLM_MODEL")
+    ):
+        args.model = os.getenv("LOCAL_HF_MODEL", DEFAULT_LOCAL_HF_MODEL)
+    if (
+        hasattr(args, "llm_provider")
         and args.llm_provider == "openai"
         and args.max_tokens == DEFAULT_LLM_MAX_TOKENS
         and not os.getenv("LLM_MAX_TOKENS")
     ):
         args.max_tokens = DEFAULT_OPENAI_MAX_TOKENS
+    if (
+        hasattr(args, "llm_provider")
+        and args.llm_provider == "nvidia"
+        and args.max_tokens == DEFAULT_LLM_MAX_TOKENS
+        and not os.getenv("LLM_MAX_TOKENS")
+    ):
+        args.max_tokens = DEFAULT_NVIDIA_MAX_TOKENS
 
     if not args.dsn:
         parser.error(
@@ -805,6 +1060,8 @@ def main():
         "discover-sets": cmd_discover_sets,
         "discover-cards": cmd_discover_cards,
         "scrape-cards": cmd_scrape_cards,
+        "link-cards": cmd_link_cards,
+        "populate-card-rules": cmd_populate_card_rules,
         "parse-effects": cmd_parse_effects,
         "single": cmd_single,
         "status": cmd_status,

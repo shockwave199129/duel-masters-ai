@@ -32,6 +32,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-blocks", type=int, default=DEFAULT_NUM_BLOCKS)
     parser.add_argument("--dropout", type=float, default=DEFAULT_DROPOUT)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--loss-mode", choices=["mse", "pairwise"], default="mse")
+    parser.add_argument("--ranking-margin", type=float, default=0.10)
     return parser
 
 
@@ -52,11 +54,14 @@ def main() -> None:
         num_blocks=args.num_blocks,
         dropout=args.dropout,
         seed=args.seed,
+        loss_mode=args.loss_mode,
+        ranking_margin=args.ranking_margin,
     )
     logger.info(
-        "Training done: rows=%s epochs=%s final_loss=%.6f output=%s",
+        "Training done: rows=%s epochs=%s loss_mode=%s final_loss=%.6f output=%s",
         summary.rows,
         summary.epochs,
+        summary.loss_mode,
         summary.final_loss,
         summary.output_path,
     )

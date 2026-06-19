@@ -48,6 +48,57 @@ def _card_subtype(s: Optional[str]) -> CardSubtype:
     mapping = {c.value.lower(): c for c in CardSubtype}
     return mapping.get(s.lower(), CardSubtype.NONE)
 
+
+def _parse_type_and_subtype(
+    raw_card_type: Optional[str],
+    raw_card_subtype: Optional[str],
+) -> tuple[CardType, CardSubtype]:
+    """
+    Derive (CardType, CardSubtype) from the raw DB strings.
+
+    The DB encodes Dragheart cards with composite card_type strings
+    ("Dragheart Creature", "Dragheart Weapon", "Dragheart Fortress") and
+    a NULL card_subtype, so the base helpers miss the DRAGHEART subtype.
+
+    Psychic Super Creatures are stored with card_type="Super Creature" and
+    card_subtype="Psychic", which the base helper maps to PSYCHIC instead
+    of PSYCHIC_SUPER.
+
+    Rules 805–808 require the engine to know these distinctions.
+    """
+    ct_raw = (raw_card_type or "Creature").strip()
+    cs_raw = (raw_card_subtype or "").strip()
+    ct_lower = ct_raw.lower()
+
+    # ── Dragheart composite card_type (no card_subtype in DB) ──────────────────
+    # DB values: "Dragheart Creature" | "Dragheart Weapon" | "Dragheart Fortress"
+    if ct_lower == "dragheart creature":
+        return CardType.CREATURE, CardSubtype.DRAGHEART
+    if ct_lower == "dragheart weapon":
+        return CardType.WEAPON, CardSubtype.DRAGHEART
+    if ct_lower == "dragheart fortress":
+        return CardType.FORTRESS, CardSubtype.DRAGHEART
+
+    # ── Psychic Super Creature ─────────────────────────────────────────────────
+    # DB: card_type="Super Creature", card_subtype="Psychic"
+    if ct_lower == "super creature" and cs_raw.lower() == "psychic":
+        return CardType.CREATURE, CardSubtype.PSYCHIC_SUPER
+
+    # ── Psychic Creature (evolution variant) ──────────────────────────────────
+    # DB: card_type="Psychic Creature", card_subtype="Evolution"
+    # These are Psychic evolution creatures — keep CREATURE type, set PSYCHIC subtype.
+    if ct_lower == "psychic creature":
+        return CardType.CREATURE, CardSubtype.PSYCHIC
+
+    # ── King Cell / King Creature (rule 814) ──────────────────────────────────
+    if ct_lower == "king cell":
+        return CardType.CELL, CardSubtype.NONE
+    if ct_lower == "king creature":
+        return CardType.CREATURE, CardSubtype.NONE
+
+    # ── Default: use base helpers ─────────────────────────────────────────────
+    return _card_type(ct_raw), _card_subtype(cs_raw or None)
+
 def _keyword(s: str) -> Optional[Keyword]:
     mapping = {k.value.lower(): k for k in Keyword}
     return mapping.get(s.lower().replace(" ", "_"))
@@ -254,10 +305,79 @@ class CardDatabase:
                 # related_slug is a race name for evolution sources
                 evo_by_card[card_id]["races"].add(related_slug)
 
+        # Load King Cell combine relations (rule 814)
+        king_target_by_card: dict[int, str] = {}
+        king_requires_by_card: dict[int, set[str]] = {}
+        king_query = """
+            SELECT card_id, related_slug, relation_type
+            FROM card_relations
+            WHERE relation_type IN ('king_combine', 'king_combine_requires')
+        """
+        king_params: list = []
+        if card_ids:
+            king_query += " AND card_id = ANY(%s)"
+            king_params = [card_ids]
+        with conn.cursor() as cur:
+            cur.execute(king_query, king_params)
+            for card_id, related_slug, rel_type in cur.fetchall():
+                if rel_type == "king_combine":
+                    king_target_by_card[card_id] = related_slug
+                elif rel_type == "king_combine_requires":
+                    king_requires_by_card.setdefault(card_id, set()).add(related_slug)
+
+        # Load God / Psychic Super link relations (post link-cards pass)
+        god_links_by_card: dict[int, set[str]] = {}
+        god_group_by_card: dict[int, str] = {}
+        god_position_by_card: dict[int, str] = {}
+        god_layout_by_card: dict[int, int] = {}
+        god_glink_slots_by_card: dict[int, list[tuple[str, str]]] = {}
+        god_glink_open_by_card: dict[int, set[str]] = {}
+        psychic_super_by_card: dict[int, set[str]] = {}
+        link_query = """
+            SELECT card_id, related_slug, relation_type
+            FROM card_relations
+            WHERE relation_type IN (
+                'god_link', 'god_link_group', 'god_link_position', 'god_link_layout',
+                'god_glink', 'god_glink_open', 'psychic_super_link'
+            )
+        """
+        link_params: list = []
+        if card_ids:
+            link_query += " AND card_id = ANY(%s)"
+            link_params = [card_ids]
+        with conn.cursor() as cur:
+            cur.execute(link_query, link_params)
+            for card_id, related_slug, rel_type in cur.fetchall():
+                if rel_type == "god_link":
+                    god_links_by_card.setdefault(card_id, set()).add(related_slug)
+                elif rel_type == "god_link_group":
+                    god_group_by_card[card_id] = related_slug.replace("_", " ")
+                elif rel_type == "god_link_position":
+                    if ":" in related_slug:
+                        god_position_by_card[card_id] = related_slug.rsplit(":", 1)[-1]
+                elif rel_type == "god_link_layout":
+                    if ":" in related_slug:
+                        try:
+                            god_layout_by_card[card_id] = int(
+                                related_slug.rsplit(":", 1)[-1]
+                            )
+                        except ValueError:
+                            pass
+                elif rel_type == "god_glink":
+                    if ":" in related_slug:
+                        side, partner = related_slug.split(":", 1)
+                        god_glink_slots_by_card.setdefault(card_id, []).append(
+                            (side, partner)
+                        )
+                elif rel_type == "god_glink_open":
+                    god_glink_open_by_card.setdefault(card_id, set()).add(related_slug)
+                elif rel_type == "psychic_super_link":
+                    psychic_super_by_card.setdefault(card_id, set()).add(related_slug)
+
         # Load main cards table
         card_query = """
             SELECT id, slug, name, cost, power, card_type, card_subtype,
-                   is_multiface
+                   is_multiface, other_face_id
             FROM cards
         """
         card_params = []
@@ -271,14 +391,20 @@ class CardDatabase:
             for row in cur.fetchall():
                 cid = row["id"]
 
+                if (row["card_type"] or "").strip().lower() == "unknown":
+                    continue
+
+                ctype, csubtype = _parse_type_and_subtype(
+                    row["card_type"], row["card_subtype"]
+                )
                 defn = CardDefinition(
                     id=cid,
                     slug=row["slug"] or "",
                     name=row["name"] or f"Card {cid}",
                     cost=row["cost"] or 0,
                     power=_parse_int_prefix(row["power"]),
-                    card_type=_card_type(row["card_type"] or "Creature"),
-                    card_subtype=_card_subtype(row["card_subtype"]),
+                    card_type=ctype,
+                    card_subtype=csubtype,
                     civilizations=frozenset(civs_by_card.get(cid, [])),
                     races=frozenset(races_by_card.get(cid, [])),
                     keywords=frozenset(keywords_by_card.get(cid, [])),
@@ -288,6 +414,22 @@ class CardDatabase:
                     ),
                     evolution_source_types=frozenset(),
                     is_multiface=bool(row["is_multiface"]),
+                    other_face_id=row["other_face_id"],
+                    king_combine_target_slug=king_target_by_card.get(cid),
+                    king_combine_required_slugs=frozenset(
+                        king_requires_by_card.get(cid, set())
+                    ),
+                    god_link_slugs=frozenset(god_links_by_card.get(cid, set())),
+                    god_link_group=god_group_by_card.get(cid),
+                    god_link_position=god_position_by_card.get(cid),
+                    god_link_layout_size=god_layout_by_card.get(cid),
+                    god_glink_slots=tuple(god_glink_slots_by_card.get(cid, [])),
+                    god_glink_open_sides=frozenset(
+                        god_glink_open_by_card.get(cid, set())
+                    ),
+                    psychic_super_cell_slugs=frozenset(
+                        psychic_super_by_card.get(cid, set())
+                    ),
                 )
 
                 self._by_id[cid] = defn

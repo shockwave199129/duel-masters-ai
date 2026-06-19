@@ -9,8 +9,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bot.action_encoder import ACTION_ENCODER_VERSION, ACTION_VECTOR_SIZE_V2, encode_action_v2
-from bot.state_encoder import OBSERVATION_ENCODER_VERSION, OBSERVATION_VECTOR_SIZE_V2, encode_observation_v2
+from bot.action_encoder import (
+    ACTION_ENCODER_VERSION,
+    ACTION_ENCODER_VERSION_V3,
+    ACTION_VECTOR_SIZE_V2,
+    ACTION_VECTOR_SIZE_V3,
+    encode_action_v2,
+    encode_action_v3,
+)
+from bot.state_encoder import (
+    OBSERVATION_ENCODER_VERSION,
+    OBSERVATION_ENCODER_VERSION_V3,
+    OBSERVATION_VECTOR_SIZE_V2,
+    OBSERVATION_VECTOR_SIZE_V3,
+    encode_observation_v2,
+    encode_observation_v3,
+)
 from core.actions import Action
 from core.enums import GameResult
 from core.state import GameState
@@ -50,6 +64,51 @@ def _target_for_player(player: int, winner: int | None, terminal: bool) -> float
     return 1.0 if winner == player else -1.0
 
 
+def _encode_decision_features(
+    state: GameState,
+    player: int,
+    legal_actions: list[Action],
+    *,
+    db,
+    encoder_version: int,
+    rule_service=None,
+) -> tuple[list[float], list[list[float]], int, int, int, int]:
+    if encoder_version == 2:
+        state_features = encode_observation_v2(state, player)
+        legal_action_features = [
+            encode_action_v2(legal_action, state=state, db=db)
+            for legal_action in legal_actions
+        ]
+        return (
+            state_features,
+            legal_action_features,
+            OBSERVATION_ENCODER_VERSION,
+            ACTION_ENCODER_VERSION,
+            OBSERVATION_VECTOR_SIZE_V2,
+            ACTION_VECTOR_SIZE_V2,
+        )
+    if encoder_version == 3:
+        state_features = encode_observation_v3(state, player, rule_service=rule_service)
+        legal_action_features = [
+            encode_action_v3(
+                legal_action,
+                state=state,
+                db=db,
+                rule_service=rule_service,
+            )
+            for legal_action in legal_actions
+        ]
+        return (
+            state_features,
+            legal_action_features,
+            OBSERVATION_ENCODER_VERSION_V3,
+            ACTION_ENCODER_VERSION_V3,
+            OBSERVATION_VECTOR_SIZE_V3,
+            ACTION_VECTOR_SIZE_V3,
+        )
+    raise ValueError("encoder_version must be 2 or 3")
+
+
 def _record_decision(
     *,
     game_id: str,
@@ -64,23 +123,35 @@ def _record_decision(
     deck_names: tuple[str, str],
     first_player: int,
     db,
+    encoder_version: int,
+    rule_service=None,
 ) -> dict[str, Any]:
     player = action.player
-    state_features = encode_observation_v2(state, player)
-    legal_action_features = [
-        encode_action_v2(legal_action, state=state, db=db)
-        for legal_action in legal_actions
-    ]
+    (
+        state_features,
+        legal_action_features,
+        observation_version,
+        action_version,
+        observation_vector_size,
+        action_vector_size,
+    ) = _encode_decision_features(
+        state,
+        player,
+        legal_actions,
+        db=db,
+        encoder_version=encoder_version,
+        rule_service=rule_service,
+    )
     policy_target = [0.0] * len(legal_actions)
     if 0 <= chosen_index < len(policy_target):
         policy_target[chosen_index] = 1.0
     heuristic_target = heuristic_state_value(state, player)
     return {
-        "schema_version": 2,
-        "observation_version": OBSERVATION_ENCODER_VERSION,
-        "action_version": ACTION_ENCODER_VERSION,
-        "observation_vector_size": OBSERVATION_VECTOR_SIZE_V2,
-        "action_vector_size": ACTION_VECTOR_SIZE_V2,
+        "schema_version": encoder_version,
+        "observation_version": observation_version,
+        "action_version": action_version,
+        "observation_vector_size": observation_vector_size,
+        "action_vector_size": action_vector_size,
         "game_id": game_id,
         "seed": seed,
         "step": step,
@@ -103,6 +174,8 @@ def _record_decision(
         "action_repr": repr(action),
         "legal_actions": [repr(legal_action) for legal_action in legal_actions],
         "legal_action_count": len(legal_actions),
+        "encoder_version": encoder_version,
+        "rule_aware": encoder_version >= 3,
         "winner": None,
         "value_target": 0.0,
         "heuristic_target": heuristic_target,
@@ -162,6 +235,9 @@ def run_recorded_game(
     use_database_decks: bool = False,
     deck_source: str | None = None,
     allow_mirror_matches: bool = False,
+    policy_encoder_version: int | None = None,
+    record_encoder_version: int = 3,
+    rule_service=None,
 ) -> tuple[GameState, list[dict[str, Any]]]:
     """Run one neural-vs-neural game and append finalized decision rows."""
     from bot.neural_bot import NeuralBot
@@ -180,15 +256,27 @@ def run_recorded_game(
         allow_mirror_matches=allow_mirror_matches,
     )
     bots = {
-        0: NeuralBot(model_path=model_path, epsilon=epsilon, seed=seed),
-        1: NeuralBot(model_path=model_path, epsilon=epsilon, seed=seed + 1),
+        0: NeuralBot(
+            model_path=model_path,
+            epsilon=epsilon,
+            seed=seed,
+            encoder_version=policy_encoder_version,
+            rule_service=rule_service,
+        ),
+        1: NeuralBot(
+            model_path=model_path,
+            epsilon=epsilon,
+            seed=seed + 1,
+            encoder_version=policy_encoder_version,
+            rule_service=rule_service,
+        ),
     }
     records: list[dict[str, Any]] = []
 
     for step in range(max_steps):
         if state.is_terminal():
             break
-        legal_actions = get_legal_actions(state, db)
+        legal_actions = bots[state.active_player].generate_candidate_actions(state, db=db)
         if not legal_actions:
             raise RuntimeError("No legal actions available")
 
@@ -209,6 +297,8 @@ def run_recorded_game(
                 deck_names=deck_names,
                 first_player=actual_first_player,
                 db=db,
+                encoder_version=record_encoder_version,
+                rule_service=rule_service,
             )
         )
 
@@ -242,6 +332,9 @@ def run_self_play_games(
     use_database_decks: bool = False,
     deck_source: str | None = None,
     allow_mirror_matches: bool = False,
+    policy_encoder_version: int | None = None,
+    record_encoder_version: int = 3,
+    rule_service=None,
 ) -> SelfPlaySummary:
     """Run and record several neural-vs-neural games."""
     output = Path(output_path)
@@ -280,6 +373,9 @@ def run_self_play_games(
             use_database_decks=use_database_decks,
             deck_source=deck_source,
             allow_mirror_matches=allow_mirror_matches,
+            policy_encoder_version=policy_encoder_version,
+            record_encoder_version=record_encoder_version,
+            rule_service=rule_service,
         )
         decisions += len(records)
         winner = _winner_from_result(state.result)

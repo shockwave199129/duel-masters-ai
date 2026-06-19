@@ -38,6 +38,7 @@ class PendingTrigger:
     source_card_id:  int            # card id for lookup
     controller:      int            # player who controls the source
     trigger_data:    dict = field(default_factory=dict)  # context (e.g. "broke shield N")
+    priority:        int = -1       # APNAP player-declared priority (-1 = not set, lower = earlier)
 
     def __repr__(self) -> str:
         return (

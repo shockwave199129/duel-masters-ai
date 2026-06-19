@@ -19,6 +19,11 @@ The pages we crawl:
 
 Both pages contain anchor tags inside tables/lists with set names and hrefs.
 We filter only hrefs that look like card set codes (DM-01, DMRP-22, DMR-01, etc.)
+
+Set code formats recognised:
+  Legacy  : DMRP-XX, DMEX-XX, DMBD-XX, DMSD-XX, DMART-XX, DM-01, DMR-01, …
+  Modern  : DM22-RPXX, DM23-BDXX, DM24-SDXX, DM25-RPXX, DM26-EX1, …
+            (year-based numbering introduced ~2022)
 """
 
 from __future__ import annotations
@@ -33,7 +38,7 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests
 from curl_cffi.requests.errors import RequestsError
 
-from scripts.cf_cookies import apply_cf_cookies
+from scripts.cf_cookies import apply_cf_cookies, fetch_html_with_browser
 
 logger = logging.getLogger(__name__)
 
@@ -44,17 +49,23 @@ SETS_PAGES = {
     "TCG": f"{BASE_URL}/wiki/List_of_Duel_Masters_TCG_Sets",
 }
 
-# Regex for valid set codes (covers all known series prefixes)
+# Regex for valid set codes — covers both legacy (DMRP-XX) and modern (DM22-RPXX) formats
 SET_CODE_RE = re.compile(
-    r"^(DM|DMR|DMRP|DMD|DMBD|DMSD|DMEX|DMSP|DMPS|DMPD|DMART|DMTG|DMVS"
-    r"|S|P|DMP|DMC|DMS|DMX|DMF|DMT)-?\d+",
+    r"^(DM\d{2}-[A-Z]+\d*"           # Modern: DM22-RP1, DM26-EX1, DM24-SD1, …
+    r"|DM|DMR|DMRP|DMD|DMBD|DMSD|DMEX|DMSP|DMPS|DMPD|DMART|DMTG|DMVS"
+    r"|S|P|DMP|DMC|DMS|DMX|DMF|DMT)-?\d*",
     re.IGNORECASE,
 )
 
-# href patterns for set pages — they look like /wiki/DMRP-22 or /wiki/DM-01_Base_Set
+# href patterns — matches both legacy (/wiki/DMRP-22) and modern (/wiki/DM26-EX1_…)
+# Applied AFTER URL-decoding the href, so Japanese kanji in codes (DMART極-1) match.
 SET_HREF_RE = re.compile(
-    r"^/wiki/(DM|DMR|DMRP|DMD|DMBD|DMSD|DMEX|DMSP|DMPS|DMPD|DMART|DMTG|DMVS"
-    r"|S\d+|DMP|DMC|DMS|DMX|DMF|DMT)-",
+    r"^/wiki/("
+    r"DM\d{2}-"                        # Modern year-prefixed: DM22-, DM23-, DM24-, DM25-, DM26-, …
+    r"|DM-|DMR-|DMRP-|DMD-|DMBD-|DMSD-|DMEX-|DMSP-|DMPS-|DMPD-|DMPCD-|DMART"
+    r"|DMTG-|DMVS-"
+    r"|S\d+-|DMP-|DMC-|DMS-|DMX-|DMF-|DMT-"
+    r")",
     re.IGNORECASE,
 )
 
@@ -99,14 +110,25 @@ def _fetch(url: str, session: requests.Session, retries: int = 3) -> Optional[st
 def _extract_set_code_from_href(href: str) -> Optional[str]:
     """
     Extract the canonical set code from a wiki href.
-    /wiki/DMRP-22_The_Super_King_Has_Arrived!! → DMRP-22
-    /wiki/DM-01_Base_Set                        → DM-01
+
+    /wiki/DMRP-22_The_Super_King_Has_Arrived!!         → DMRP-22
+    /wiki/DM-01_Base_Set                               → DM-01
+    /wiki/DM26-EX1_MasuMasu_Tsuyoi_Packs:_25_of_…     → DM26-EX1
+    /wiki/DM22-RP2X_Dragon_Emperor_of_Booming_Flame    → DM22-RP2X
     """
     slug = href.replace("/wiki/", "").split("_")[0]
-    # Clean any URL-encoded chars
     slug = unquote(slug)
+
+    # Modern format: DM{2digits}-{letters}{digits}  e.g. DM26-EX1, DM22-RP2X
+    modern = re.match(r"^(DM\d{2}-[A-Z]+\d*[A-Z]?)", slug, re.IGNORECASE)
+    if modern:
+        return modern.group(1).upper()
+
+    # Legacy format: DMRP-22, DMEX-05, DM-01, etc.
     if SET_CODE_RE.match(slug):
+        # Return just the set code portion (everything before the first space or extra _)
         return slug.upper()
+
     return None
 
 
@@ -128,35 +150,37 @@ def _parse_sets_page(html: str, series: str, base_url: str = BASE_URL) -> list[d
     content = soup.find("div", id="content") or soup.find("div", class_="mw-content-text") or soup
 
     for a in content.find_all("a", href=True):
-        href: str = a["href"]
+        href: str = str(a["href"])
+        # Decode percent-encoding so DMART%E6%A5%B5-1 matches as DMART極-1
+        href_decoded = unquote(href)
 
-        # Must match set href pattern
-        if not SET_HREF_RE.match(href):
+        # Must match set href pattern (applied to decoded href)
+        if not SET_HREF_RE.match(href_decoded):
             continue
 
-        # Skip gallery pages
-        if "Gallery" in href or "gallery" in href:
+        # Skip gallery / disambiguation pages
+        if "Gallery" in href_decoded or "gallery" in href_decoded:
+            continue
+        if "disambiguation" in href_decoded.lower():
             continue
 
-        # Skip disambiguation pages
-        if "disambiguation" in href.lower():
-            continue
-
-        set_code = _extract_set_code_from_href(href)
+        set_code = _extract_set_code_from_href(href_decoded)
         if not set_code or set_code in seen:
             continue
 
-        # Build full URL
+        # Build full URL (use original encoded href for the actual request URL)
         set_url = base_url + href if href.startswith("/") else href
 
         # Card name: link text, cleaned
         set_name = a.get_text(strip=True)
         # Remove the set code prefix if it appears in name (e.g. "DMRP-22 The Super King")
-        set_name = re.sub(rf"^{re.escape(set_code)}\s*[:\-—]?\s*", "", set_name).strip()
+        set_name = re.sub(rf"^{re.escape(set_code)}\s*[:\-—]?\s*", "", set_name, flags=re.IGNORECASE).strip()
         if not set_name:
-            # Fall back to slug-based name from href
-            slug = href.replace("/wiki/", "")
+            # Fall back to slug-based name from decoded href
+            slug = href_decoded.replace("/wiki/", "")
             set_name = slug.replace("_", " ").split("(")[0].strip()
+            # Remove set code prefix from slug-based name too
+            set_name = re.sub(rf"^{re.escape(set_code)}\s*[:\-—]?\s*", "", set_name, flags=re.IGNORECASE).strip()
 
         seen.add(set_code)
         results.append({
@@ -199,6 +223,13 @@ def crawl_sets_list(
     for series_name, page_url in pages_to_crawl:
         logger.info(f"Crawling {series_name} sets list: {page_url}")
         html = _fetch(page_url, session)
+        if not html:
+            # The list pages often require JavaScript rendering — fall back to Playwright
+            logger.warning(f"curl_cffi failed for {series_name} sets list; trying Playwright")
+            try:
+                html = fetch_html_with_browser(page_url)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error(f"Playwright fallback also failed for {series_name}: {exc}")
         if not html:
             logger.error(f"Failed to fetch sets list for {series_name}")
             continue

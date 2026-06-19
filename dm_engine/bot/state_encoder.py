@@ -8,10 +8,12 @@ from math import prod
 from core.enums import CardType, Civilization, Keyword, Phase
 from core.observation import Observation
 from core.state import GameState
+from rules import RuleKnowledgeService, phase_key_for_engine_phase
 
 
 OBSERVATION_VECTOR_SIZE = 14
 OBSERVATION_ENCODER_VERSION = 2
+OBSERVATION_ENCODER_VERSION_V3 = 3
 
 _CIVILIZATIONS = [
     Civilization.FIRE,
@@ -42,6 +44,18 @@ _ROLE_KEYWORDS = {
     "shield_trigger": Keyword.SHIELD_TRIGGER,
 }
 _TOP_CREATURE_SLOTS_PER_SIDE = 2
+_RULE_CATEGORIES = [
+    "win_loss",
+    "turn_structure",
+    "cost_payment",
+    "trigger",
+    "replacement",
+    "keyword",
+    "zone_rule",
+    "special_card",
+    "state_based",
+    "general",
+]
 
 
 def _norm(value: float, maximum: float) -> float:
@@ -237,6 +251,177 @@ def _playable_hand_features(state: GameState, perspective: int) -> list[float]:
     return features
 
 
+def _safe_rule_service(rule_service) -> RuleKnowledgeService | None:
+    return rule_service if isinstance(rule_service, RuleKnowledgeService) else rule_service
+
+
+def _break_count(creature) -> int:
+    definition = getattr(creature, "definition", creature)
+    try:
+        shields = int(definition.shields_broken())
+    except Exception:
+        shields = 1
+    return 5 if shields >= 999 else max(1, shields)
+
+
+def _can_attack_player(creature) -> bool:
+    try:
+        return bool(creature.can_attack() and creature.can_attack_players())
+    except Exception:
+        return False
+
+
+def _lethal_features(state: GameState, player: int) -> list[float]:
+    me = state.players[player]
+    opp = state.players[1 - player]
+    attackers = [creature for creature in me.battle_zone if _can_attack_player(creature)]
+    max_break = max((_break_count(creature) for creature in attackers), default=0)
+    direct_win = bool(attackers and opp.shield_count == 0)
+    breaks_all_shields = bool(attackers and max_break >= opp.shield_count > 0)
+    return [
+        _bool(direct_win),
+        _bool(breaks_all_shields),
+        _norm(len(attackers), 8),
+        _norm(max_break, 5),
+    ]
+
+
+def _combat_pressure_features(state: GameState, perspective: int) -> list[float]:
+    me = state.players[perspective]
+    opp = state.players[1 - perspective]
+    my_attackers = [c for c in me.battle_zone if getattr(c, "can_attack", lambda: False)()]
+    opp_attackers = [c for c in opp.battle_zone if getattr(c, "can_attack", lambda: False)()]
+    my_blockers = [c for c in me.battle_zone if getattr(c, "is_blocker", lambda: False)() and not c.is_tapped]
+    opp_blockers = [c for c in opp.battle_zone if getattr(c, "is_blocker", lambda: False)() and not c.is_tapped]
+    my_tapped = [c for c in me.battle_zone if getattr(c, "is_tapped", False)]
+    opp_tapped = [c for c in opp.battle_zone if getattr(c, "is_tapped", False)]
+    my_power = sum(_card_power(c, state) for c in me.battle_zone)
+    opp_power = sum(_card_power(c, state) for c in opp.battle_zone)
+    return [
+        _norm(len(my_attackers), 8),
+        _norm(len(opp_attackers), 8),
+        _norm(len(my_blockers), 8),
+        _norm(len(opp_blockers), 8),
+        _norm(len(my_tapped), 8),
+        _norm(len(opp_tapped), 8),
+        _norm(max((_card_power(c, state) for c in me.battle_zone), default=0), 20000),
+        _norm(max((_card_power(c, state) for c in opp.battle_zone), default=0), 20000),
+        max(-1.0, min(1.0, (my_power - opp_power) / 40000.0)),
+    ]
+
+
+def _curve_features(state: GameState, perspective: int) -> list[float]:
+    player = state.players[perspective]
+    available = player.available_mana
+    next_turn = min(player.mana_count + 1, 20)
+    hand = list(player.hand)
+    total = max(len(hand), 1)
+    playable_now = sum(1 for card in hand if _card_cost(card) <= available)
+    playable_next = sum(1 for card in hand if _card_cost(card) <= next_turn)
+    missing_civs = set()
+    available_civs = player.available_civilizations()
+    all_civs = player.all_mana_civilizations()
+    for card in hand:
+        for civ in _card_civs(card):
+            if civ not in available_civs:
+                missing_civs.add(civ)
+    return [
+        _norm(playable_now, 10),
+        _norm(playable_next, 10),
+        float(playable_now) / total,
+        float(playable_next) / total,
+        _norm(len(missing_civs), len(_CIVILIZATIONS)),
+        _norm(len(all_civs), len(_CIVILIZATIONS)),
+    ]
+
+
+def _public_trigger_density(state: GameState, perspective: int) -> list[float]:
+    me = state.players[perspective]
+    opp = state.players[1 - perspective]
+    my_remaining = me.cards_remaining_in_deck_by_id(include_hidden_shields=False)
+    definitions = {
+        card.id: _card_definition(card)
+        for zone in (me.hand, me.mana_zone, me.battle_zone, me.graveyard)
+        for card in zone
+    }
+    trigger_count = 0
+    for card_id, count in my_remaining.items():
+        definition = definitions.get(card_id)
+        if definition is not None and Keyword.SHIELD_TRIGGER in _card_keywords(definition):
+            trigger_count += count
+    opp_public_cards = list(opp.mana_zone) + list(opp.battle_zone) + list(opp.graveyard)
+    opp_public_total = max(len(opp_public_cards), 1)
+    opp_public_triggers = sum(
+        1 for card in opp_public_cards if Keyword.SHIELD_TRIGGER in _card_keywords(card)
+    )
+    return [
+        _norm(trigger_count, 16),
+        _draw_probability(trigger_count, max(me.deck_size, 0), 1),
+        float(opp_public_triggers) / float(opp_public_total),
+    ]
+
+
+def _phase_context_features(state: GameState, perspective: int) -> list[float]:
+    obs = Observation.build(state, perspective)
+    awaited_for_me = bool(obs.awaited_choice_type)
+    ctx = state.attack_context
+    return [
+        _bool(state.is_in_attack()),
+        _bool(ctx is not None and ctx.is_attacking_player),
+        _bool(ctx is not None and ctx.is_attacking_creature),
+        _bool(ctx is not None and ctx.block_was_offered),
+        _bool(ctx is not None and ctx.block_was_declared),
+        _norm(len(state.effect_stack.shield_trigger_queue), 5),
+        _bool(awaited_for_me),
+        _norm(len(obs.valid_choice_options), 10),
+        _bool(state.turn_info.should_skip_draw()),
+    ]
+
+
+def _rule_context_features(state: GameState, rule_service=None) -> list[float]:
+    service = _safe_rule_service(rule_service)
+    phase_info = service.get_phase_info(state.current_phase) if service is not None else None
+    sba_count = len(service.get_state_based_actions()) if service is not None else 0
+    phase_rules = service.get_phase_rules(state.current_phase) if service is not None else []
+    categories = {rule.rule_category for rule in phase_rules}
+    visible_keywords = {
+        keyword.value
+        for player in state.players
+        for creature in player.battle_zone
+        for keyword in _card_keywords(creature)
+    }
+    keyword_rules = service.get_keyword_rules(visible_keywords) if service is not None else {}
+    requires_declaration = sum(1 for rule in keyword_rules.values() if rule.requires_declaration)
+    overrides_sickness = sum(1 for rule in keyword_rules.values() if rule.overrides_summoning_sickness)
+    return [
+        _norm(phase_info.phase_order if phase_info is not None else state.current_phase.value, 20),
+        _bool(phase_info.is_optional if phase_info is not None else state.current_phase in {Phase.MANA_CHARGE, Phase.MAIN, Phase.ATTACK}),
+        _bool(phase_info.can_repeat if phase_info is not None else state.current_phase in {Phase.ATTACK, Phase.ATTACK_DECLARE}),
+        _norm(sba_count, 20),
+        *[1.0 if category in categories else 0.0 for category in _RULE_CATEGORIES],
+        _norm(requires_declaration, 10),
+        _norm(overrides_sickness, 10),
+    ]
+
+
+def encode_observation_v3(
+    state: GameState,
+    perspective: int,
+    *,
+    rule_service=None,
+) -> list[float]:
+    """Encode public information plus deterministic rule-aware context."""
+    features = encode_observation_v2(state, perspective)
+    features.extend(_lethal_features(state, perspective))
+    features.extend(_lethal_features(state, 1 - perspective))
+    features.extend(_combat_pressure_features(state, perspective))
+    features.extend(_curve_features(state, perspective))
+    features.extend(_public_trigger_density(state, perspective))
+    features.extend(_phase_context_features(state, perspective))
+    features.extend(_rule_context_features(state, rule_service))
+    return features
+
+
 def feature_schema_v2() -> dict[str, object]:
     return {
         "version": OBSERVATION_ENCODER_VERSION,
@@ -246,6 +431,15 @@ def feature_schema_v2() -> dict[str, object]:
         "keywords": [k.value for k in _KEYWORDS],
         "top_creature_slots_per_side": _TOP_CREATURE_SLOTS_PER_SIDE,
         "vector_size": OBSERVATION_VECTOR_SIZE_V2,
+    }
+
+
+def feature_schema_v3() -> dict[str, object]:
+    return {
+        "version": OBSERVATION_ENCODER_VERSION_V3,
+        "base_version": OBSERVATION_ENCODER_VERSION,
+        "rule_categories": list(_RULE_CATEGORIES),
+        "vector_size": OBSERVATION_VECTOR_SIZE_V3,
     }
 
 
@@ -352,3 +546,20 @@ def _compute_vector_size_v2() -> int:
 
 
 OBSERVATION_VECTOR_SIZE_V2 = _compute_vector_size_v2()
+
+
+def _compute_vector_size_v3() -> int:
+    rule_context_size = 4 + len(_RULE_CATEGORIES) + 2
+    return (
+        OBSERVATION_VECTOR_SIZE_V2
+        + 4   # current player lethal features
+        + 4   # opponent lethal features
+        + 9   # combat pressure
+        + 6   # curve features
+        + 3   # trigger density
+        + 9   # phase context
+        + rule_context_size
+    )
+
+
+OBSERVATION_VECTOR_SIZE_V3 = _compute_vector_size_v3()

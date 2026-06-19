@@ -17,13 +17,13 @@ from __future__ import annotations
 import random
 from typing import Optional
 
-from .enums import Phase
+from .enums import Phase, CardSubtype
 from .cards import CardDefinition, DeckDefinition
-from .zones import HandCard, ShieldCard
+from .zones import HandCard, ShieldCard, Creature, HyperspatialCard, _new_uid
 from .player_state import PlayerState
 from .state import GameState, TurnInfo
 from .global_effects import GlobalEffectRegistry
-from .enums import MAX_SHIELDS, STARTING_HAND_SIZE
+from .enums import MAX_SHIELDS, STARTING_HAND_SIZE, MAX_HYPERSPATIAL
 
 
 def initialize_game(
@@ -127,6 +127,32 @@ def _build_player(
     # ── Remaining cards form the deck (order hidden from player) ───────────────
     deck = all_cards   # ordered list, top = index 0
 
+    # ── Create Hyperspatial Zone (rule 805.4, 807.4) ────────────────────────────
+    # Psychic and Dragheart cards are placed in hyperspatial zone at game start
+    hyperspatial_zone: list[HyperspatialCard] = []
+    hyperspatial_total = sum(deck_def.hyperspatial_counts.values())
+    if hyperspatial_total > MAX_HYPERSPATIAL:
+        raise ValueError(
+            f"DeckDefinition '{deck_def.name}' has {hyperspatial_total} hyperspatial cards, "
+            f"but max is {MAX_HYPERSPATIAL} (rule 407.1)"
+        )
+
+    for card_id, count in deck_def.hyperspatial_counts.items():
+        defn = deck_def.card_definitions.get(card_id)
+        if defn is None:
+            raise ValueError(
+                f"Hyperspatial card ID {card_id} not resolved in DeckDefinition '{deck_def.name}'"
+            )
+        for _ in range(count):
+            # Create as HyperspatialCard in hyperspatial zone (rule 805.4, 807.4)
+            # Face defaults to 0 (lower-cost face)
+            card = HyperspatialCard(
+                definition=defn,
+                face=0,
+                uid=_new_uid(),
+            )
+            hyperspatial_zone.append(card)
+
     # ── Build PlayerState ──────────────────────────────────────────────────────
     player = PlayerState(
         player_index=player_index,
@@ -138,6 +164,7 @@ def _build_player(
         shield_zone=shield_zone,
         graveyard=[],
         abyss_zone=[],
+        hyperspatial_zone=hyperspatial_zone,
         # deck_composition is the PUBLIC info — player always knows this
         deck_composition=dict(deck_def.card_counts),
     )

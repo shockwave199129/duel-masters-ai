@@ -193,28 +193,37 @@ class StateManager:
     # ── Set-level operations ───────────────────────────────────────────────────
 
     def add_sets(self, sets: list[dict]):
-        """Bulk-insert newly discovered sets into DB + state."""
+        """Bulk upsert discovered sets into DB + state (no deletes)."""
+        if not sets:
+            return
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
                 for s in sets:
-                    if s["set_code"] in self._state.sets:
-                        continue
                     cur.execute(
                         """
                         INSERT INTO card_sets (set_code, set_name, set_url, series)
                         VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (set_code) DO NOTHING
+                        ON CONFLICT (set_code) DO UPDATE SET
+                            set_name = EXCLUDED.set_name,
+                            set_url  = EXCLUDED.set_url,
+                            series   = EXCLUDED.series
                         """,
                         (s["set_code"], s["set_name"], s["set_url"], s.get("series", "")),
                     )
-                    self._state.sets[s["set_code"]] = SetState(
-                        set_code=s["set_code"],
-                        set_name=s["set_name"],
-                        set_url=s["set_url"],
-                        series=s.get("series", ""),
-                        status="pending",
-                    )
+                    existing = self._state.sets.get(s["set_code"])
+                    if existing:
+                        existing.set_name = s["set_name"]
+                        existing.set_url = s["set_url"]
+                        existing.series = s.get("series", "")
+                    else:
+                        self._state.sets[s["set_code"]] = SetState(
+                            set_code=s["set_code"],
+                            set_name=s["set_name"],
+                            set_url=s["set_url"],
+                            series=s.get("series", ""),
+                            status="pending",
+                        )
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -266,9 +275,8 @@ class StateManager:
     # ── Card URL operations ────────────────────────────────────────────────────
 
     def add_card_urls(self, cards: list[dict]):
-        """Bulk-insert newly discovered card URLs into DB + state."""
-        new = [c for c in cards if c["url"] not in self._state.card_urls]
-        if not new:
+        """Bulk upsert discovered card URLs into DB + state (no deletes)."""
+        if not cards:
             return
         conn = self._get_conn()
         try:
@@ -278,17 +286,27 @@ class StateManager:
                     """
                     INSERT INTO card_urls (url, card_name, set_code, status)
                     VALUES %s
-                    ON CONFLICT (url) DO NOTHING
+                    ON CONFLICT (url) DO UPDATE SET
+                        card_name = EXCLUDED.card_name,
+                        set_code  = EXCLUDED.set_code
                     """,
-                    [(c["url"], c.get("card_name", ""), c.get("set_code", ""), "pending") for c in new],
+                    [
+                        (c["url"], c.get("card_name", ""), c.get("set_code", ""), "pending")
+                        for c in cards
+                    ],
                 )
             conn.commit()
-            for c in new:
-                self._state.card_urls[c["url"]] = CardUrlState(
-                    url=c["url"],
-                    card_name=c.get("card_name", ""),
-                    set_code=c.get("set_code", ""),
-                )
+            for c in cards:
+                existing = self._state.card_urls.get(c["url"])
+                if existing:
+                    existing.card_name = c.get("card_name", "")
+                    existing.set_code = c.get("set_code", "")
+                else:
+                    self._state.card_urls[c["url"]] = CardUrlState(
+                        url=c["url"],
+                        card_name=c.get("card_name", ""),
+                        set_code=c.get("set_code", ""),
+                    )
         except Exception as e:
             conn.rollback()
             raise
@@ -331,6 +349,42 @@ class StateManager:
     def is_card_done(self, url: str) -> bool:
         c = self._state.card_urls.get(url)
         return c is not None and c.status in ("scraped", "parsed")
+
+    def requeue_from_start(self) -> dict[str, int]:
+        """
+        Re-run the full pipeline from stage 1 without deleting any rows.
+
+        Only UPDATEs status/timestamps so later stages upsert fresh data on top.
+        """
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE card_sets SET scraped_at = NULL, card_count = 0"
+                )
+                sets_reset = cur.rowcount
+                cur.execute(
+                    """
+                    UPDATE card_urls
+                    SET status = 'pending', scraped_at = NULL, parsed_at = NULL
+                    """
+                )
+                urls_requeued = cur.rowcount
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+        for set_state in self._state.sets.values():
+            set_state.status = "pending"
+            set_state.card_count = 0
+            set_state.error_msg = ""
+        for card_state in self._state.card_urls.values():
+            card_state.status = "pending"
+            card_state.error_msg = ""
+
+        self.save()
+        return {"sets_reset": sets_reset, "card_urls_requeued": urls_requeued}
 
     # ── Summary ────────────────────────────────────────────────────────────────
 

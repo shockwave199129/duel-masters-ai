@@ -14,7 +14,7 @@ from typing import Optional
 
 from .enums import Civilization, Zone
 from .cards import CardDefinition
-from .zones import HandCard, ManaCard, ShieldCard, Creature, GraveyardCard
+from .zones import HandCard, ManaCard, ShieldCard, Creature, GraveyardCard, HyperspatialCard
 
 
 @dataclass
@@ -51,7 +51,7 @@ class PlayerState:
     # ── Extra zones (rule 407, 408) ───────────────────────────────────────────
     # Hyperspatial zone: Psychic creatures, Draghearts, Duel Mates waiting to be
     # summoned. Face-up and visible to both players (rule 407.2).
-    hyperspatial_zone: list["Creature"] = field(default_factory=list)
+    hyperspatial_zone: list[HyperspatialCard] = field(default_factory=list)
 
     # Ultra GR zone: GR creatures. Face-DOWN — contents hidden until summoned
     # (rule 408.1). Both players know the count but not which cards.

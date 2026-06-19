@@ -9,15 +9,17 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from bot.action_encoder import ACTION_VECTOR_SIZE_V2
-from bot.state_encoder import OBSERVATION_VECTOR_SIZE_V2
+from bot.action_encoder import ACTION_VECTOR_SIZE_V2, ACTION_VECTOR_SIZE_V3
+from bot.state_encoder import OBSERVATION_VECTOR_SIZE_V2, OBSERVATION_VECTOR_SIZE_V3
 
 
-MODEL_INPUT_SIZE = OBSERVATION_VECTOR_SIZE_V2 + ACTION_VECTOR_SIZE_V2
+MODEL_INPUT_SIZE_V2 = OBSERVATION_VECTOR_SIZE_V2 + ACTION_VECTOR_SIZE_V2
+MODEL_INPUT_SIZE_V3 = OBSERVATION_VECTOR_SIZE_V3 + ACTION_VECTOR_SIZE_V3
+MODEL_INPUT_SIZE = MODEL_INPUT_SIZE_V3
 DEFAULT_HIDDEN_SIZE = 256
 DEFAULT_NUM_BLOCKS = 4
 DEFAULT_DROPOUT = 0.10
-MODEL_ARCHITECTURE = "ActionScoreNetV2"
+MODEL_ARCHITECTURE = "ActionScoreNetV3"
 
 
 class ResidualMLPBlock(nn.Module):
@@ -90,7 +92,7 @@ class LegacyActionScoreNet(nn.Module):
 
     def __init__(
         self,
-        input_size: int = MODEL_INPUT_SIZE,
+        input_size: int = MODEL_INPUT_SIZE_V2,
         hidden_size: int = 128,
     ):
         super().__init__()
@@ -119,6 +121,7 @@ def save_model(model: nn.Module, path: str | Path) -> None:
         "schema_version": 2,
     }
     if isinstance(model, ActionScoreNet):
+        encoder_version = 3 if model.input_size == MODEL_INPUT_SIZE_V3 else 2
         metadata.update(
             {
                 "input_size": model.input_size,
@@ -126,6 +129,7 @@ def save_model(model: nn.Module, path: str | Path) -> None:
                 "num_blocks": model.num_blocks,
                 "dropout": model.dropout,
                 "model": MODEL_ARCHITECTURE,
+                "encoder_version": encoder_version,
             }
         )
     elif isinstance(model, LegacyActionScoreNet):
@@ -166,8 +170,9 @@ def load_model(
             )
             model.load_state_dict(state_dict)
         else:
+            input_size = int(checkpoint.get("input_size", MODEL_INPUT_SIZE))
             model = ActionScoreNet(
-                input_size=int(checkpoint.get("input_size", MODEL_INPUT_SIZE)),
+                input_size=input_size,
                 hidden_size=int(checkpoint.get("hidden_size", hidden_size)),
                 num_blocks=int(checkpoint.get("num_blocks", num_blocks)),
                 dropout=float(checkpoint.get("dropout", dropout)),

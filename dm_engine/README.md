@@ -228,6 +228,19 @@ python dm_engine/scripts/play_neural_game.py \
   --max-steps 1000
 ```
 
+Play against a trained model from the terminal:
+
+```bash
+python dm_engine/scripts/play_neural_game.py \
+  --model-path dm_engine/models/gen4_v3_action_score.pt \
+  --mode human-vs-neural \
+  --human-player 0 \
+  --max-steps 1000
+```
+
+On your turns, the script prints your observation and numbered legal actions.
+Enter the action number to play it, or `q` to quit.
+
 Save a player-friendly step log to a text file:
 
 ```bash
@@ -250,6 +263,7 @@ Useful flags:
 - `--epsilon 0.05`: random exploration rate. Use `0.0` for fully greedy action selection.
 - `--model-path path/to/model.pt`: load saved neural-network weights.
 - `--first-player 0`: choose which player starts.
+- `--human-player 0`: in `human-vs-neural`, choose whether the human is Player 0 or Player 1.
 - `--seed 1`: make shuffle and bot choices reproducible. Omit it for a new random game each run.
 - `--max-steps 1000`: stop long games after this many legal actions.
 - `--show-steps`: print readable action-by-action output for non-technical review.
@@ -295,18 +309,44 @@ metadata rather than raw card-ID slots.
 
 ## Training The Neural Bot
 
-The v2 reinforcement-learning loop records all legal actions for each decision,
-stores the chosen action index, and trains `ActionScoreNet` using blended targets:
-final win/loss plus a bounded heuristic score for non-terminal signal.
+The default v3 reinforcement-learning loop records all legal actions for each
+decision, stores the chosen action index, and trains `ActionScoreNet` using
+blended targets: final win/loss plus a bounded heuristic score for non-terminal
+signal.
 
-Run v2 gen-0 neural-vs-neural games and save every decision:
+V3 adds a hybrid rule-aware feature layer:
+
+- PostgreSQL supplies structured rule facts from `dm_rules`, `dm_game_phases`,
+  `dm_state_based_actions`, and `dm_keywords`.
+- ChromaDB is optional and used only for explanations/debug context, not action
+  legality.
+- The bot uses a rule-aware candidate generator that consults the rule service
+  before producing executable `Action` candidates. The deterministic engine
+  remains the final legality/execution guardrail, so the bot cannot invent an
+  invalid free-form action.
+
+Run v3 gen-0 neural-vs-neural games and save every decision:
 
 ```bash
 python dm_engine/scripts/run_self_play.py \
   --games 50 \
-  --output data/self_play/gen0_v2_games.jsonl \
+  --output data/self_play/gen0_v3_games.jsonl \
   --overwrite
 ```
+
+Older v2 checkpoints are supported as teacher policies. By default, the policy
+encoder is inferred from `--model-path`, while the saved training rows use v3:
+
+```bash
+python dm_engine/scripts/run_self_play.py \
+  --model-path dm_engine/models/gen3_v2_action_score.pt \
+  --games 200 \
+  --output data/self_play/gen3_teacher_v3_rows.jsonl \
+  --overwrite
+```
+
+Use `--record-encoder-version 2` only when you specifically want old v2 rows.
+Use `--encoder-version 2` only to force a fresh/random v2 policy model.
 
 You can also use presets:
 
@@ -333,7 +373,7 @@ python dm_engine/scripts/run_self_play.py \
   --use-db-decks \
   --deck-source prebuilt_game \
   --preset standard \
-  --output data/self_play/gen1_v2_games.jsonl \
+  --output data/self_play/gen1_v3_games.jsonl \
   --overwrite
 ```
 
@@ -342,7 +382,7 @@ them to Player 0 / Player 1 with a balanced random-offset schedule, and records
 `deck_ids`, `deck_names`, `player_deck_id`, `player_deck_name`, and
 `first_player` in each training row for auditability.
 
-The JSONL file contains one v2 training row for each decision:
+The JSONL file contains one training row for each decision:
 
 ```text
 state_features
@@ -357,11 +397,13 @@ final_winner
 value_target
 heuristic_target
 blended_target
+encoder_version
+rule_aware
 ```
 
-The v2 trainer flattens each legal-action set into action-score examples. The
-chosen action receives `blended_target`; non-chosen legal actions receive a lower
-heuristic target. The default blend favors terminal outcome:
+The trainer flattens each legal-action set into action-score examples. The
+chosen action receives `blended_target`; non-chosen legal actions receive a
+lower heuristic target. The default blend favors terminal outcome:
 
 ```text
 blended_target = 0.65 * value_target + 0.35 * heuristic_target
@@ -378,8 +420,18 @@ Train gen 1 from the recorded decisions:
 
 ```bash
 python dm_engine/scripts/train_action_score.py \
-  --input data/self_play/gen0_v2_games.jsonl \
-  --output dm_engine/models/gen1_v2_action_score.pt \
+  --input data/self_play/gen0_v3_games.jsonl \
+  --output dm_engine/models/gen1_v3_action_score.pt \
+  --epochs 10
+```
+
+To train with an action-ranking objective instead of per-action MSE:
+
+```bash
+python dm_engine/scripts/train_action_score.py \
+  --input data/self_play/gen0_v3_games.jsonl \
+  --output dm_engine/models/gen1_v3_ranked_action_score.pt \
+  --loss-mode pairwise \
   --epochs 10
 ```
 
@@ -387,18 +439,31 @@ Then run the trained model:
 
 ```bash
 python dm_engine/scripts/play_neural_game.py \
-  --model-path dm_engine/models/gen1_v2_action_score.pt \
+  --model-path dm_engine/models/gen1_v3_action_score.pt \
   --mode neural-vs-neural \
   --max-steps 1000
 ```
 
+To include rule-retrieval context in a report, pass a ChromaDB path created by
+`rules_ingest`:
+
+```bash
+python dm_engine/scripts/play_neural_game.py \
+  --model-path dm_engine/models/gen1_v3_action_score.pt \
+  --mode neural-vs-neural \
+  --chroma-path dm_chroma_db \
+  --explain-actions \
+  --report-path data/reports/gen1_v3_rules_report.txt
+```
+
 Recommended training milestones:
 
-1. Record 50 gen-0 v2 neural-vs-neural games for a quick check.
-2. Train `ActionScoreNet` from v2 legal-action rows.
-3. Run `NeuralBot` with `dm_engine/models/gen1_v2_action_score.pt`.
+1. Record 50 gen-0 v3 neural-vs-neural games for a quick check.
+2. Train `ActionScoreNet` from v3 legal-action rows.
+3. Run `NeuralBot` with `dm_engine/models/gen1_v3_action_score.pt`.
 4. Record 100, then 500+ better self-play games from the latest model.
-5. Add policy/value heads and MCTS only after the v2 pipeline and engine are stable.
+5. Try `--loss-mode pairwise` once the v3 feature schema is stable.
+6. Add policy/value heads and MCTS only after the v3 pipeline and engine are stable.
 
 ## Run Tests
 
@@ -425,7 +490,19 @@ The engine is still incomplete. Important known gaps include:
 - Real G-Strike and detailed effect text execution.
 - More effect actions such as return-to-hand, tap, mana placement, and shield placement.
 - Command seal-removal rules.
-- Evolution reconstruction when only the top card leaves.
 - More complete handling for special starting Battle Zone sets.
 
-When adding these, write focused rule tests and cite the relevant rule numbers in comments or test names where useful.
+**Evolution Rules Implementation Status (Complete)**:
+
+- ✅ Full evolution stack model with state preservation (rule 801).
+- ✅ S-MAX Evolution mechanics: no-base summon and uniqueness SBA (rule 815).
+- ✅ NEO Evolution state tracking and conditional summoning sickness (rules 802.1–802.4).
+- ✅ G-NEO all-leave replacement effect (rule 803).
+- ✅ Star Evolution top-only leave replacement (rule 813).
+- ✅ Evolution reconstruction with invalid card cleanup (rule 801.4).
+- ✅ Whole-stack destroy with proper trigger semantics (rule 109.2b, 316.3).
+- ✅ Underlying card characteristics ignored (rule 200.3a).
+
+See `dm_engine/tests/test_evolution_rules.py` for smoke tests covering stack management, NEO state, and replacement detection.
+
+When adding new features, write focused rule tests and cite the relevant rule numbers in comments or test names where useful.

@@ -43,11 +43,29 @@ def order_simultaneous_triggers(
     triggers: list[PendingTrigger],
     turn_player: int,
 ) -> list[PendingTrigger]:
-    """Order simultaneous triggers by turn player, then non-turn player."""
-    return [
-        *[trigger for trigger in triggers if trigger.controller == turn_player],
-        *[trigger for trigger in triggers if trigger.controller != turn_player],
-    ]
+    """
+    Order simultaneous triggers by APNAP (Active Player, Non-Active Player):
+    
+    Three-tier sort:
+      1. Turn player's triggers first, then non-turn player's triggers
+      2. Within each tier, sort by priority (lower = earlier; -1 = not set, sorted last)
+      3. Within same tier/priority, preserve registration order (stable sort)
+    
+    Rule 101.4: Turn player declares order of their simultaneous triggers;
+    non-turn player declares order of theirs.
+    """
+    def sort_key(trigger: PendingTrigger) -> tuple:
+        is_turn_player = 0 if trigger.controller == turn_player else 1
+        # Priority -1 (not set) sorts last within tier; else sort by priority value (lower = earlier)
+        if trigger.priority < 0:
+            # Not set: sorts last (high value)
+            priority_val = (1, 999999)
+        else:
+            # Set: sorts earlier (low value first)
+            priority_val = (0, trigger.priority)
+        return (is_turn_player, priority_val)
+    
+    return sorted(triggers, key=sort_key)
 
 
 def _trigger_condition_matches(state: GameState, trigger: PendingTrigger) -> bool:

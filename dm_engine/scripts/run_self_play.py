@@ -14,6 +14,7 @@ if str(DM_ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(DM_ENGINE_ROOT))
 
 from db.card_database import CardDatabase
+from rules import RuleKnowledgeService
 from training.self_play import run_self_play_games
 
 logger = logging.getLogger("run_self_play")
@@ -39,7 +40,7 @@ def _load_env_file(path: Path) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run v2 neural self-play")
+    parser = argparse.ArgumentParser(description="Run neural self-play")
     parser.add_argument("--dsn", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--deck-json", type=Path, default=DEFAULT_DECK_JSON)
     parser.add_argument("--use-db-decks", action="store_true", help="Sample active training decks from the database")
@@ -54,6 +55,21 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--first-player", type=int, choices=[0, 1], default=0)
     parser.add_argument("--model-path", type=Path, default=None)
     parser.add_argument("--terminal-weight", type=float, default=0.65, help="Weight for final win/loss when blending with heuristic targets")
+    parser.add_argument(
+        "--encoder-version",
+        type=int,
+        choices=[2, 3],
+        default=None,
+        help="Override policy/model encoder version. By default this is inferred from --model-path, or v3 for a fresh model.",
+    )
+    parser.add_argument(
+        "--record-encoder-version",
+        type=int,
+        choices=[2, 3],
+        default=3,
+        help="Encoder schema for saved training rows. Defaults to v3 even when an old v2 model is used as the policy.",
+    )
+    parser.add_argument("--chroma-path", type=Path, default=None, help="Optional ChromaDB path for rule explanations/debug context")
     parser.add_argument(
         "--fixed-seating",
         action="store_true",
@@ -83,6 +99,12 @@ def main() -> None:
 
     db = CardDatabase(args.dsn)
     db.load()
+    rule_service = (
+        RuleKnowledgeService.from_card_database(
+            db,
+            chroma_path=str(args.chroma_path) if args.chroma_path is not None else None,
+        )
+    )
     summary = run_self_play_games(
         db=db,
         deck_json=args.deck_json,
@@ -99,6 +121,9 @@ def main() -> None:
         use_database_decks=args.use_db_decks,
         deck_source=args.deck_source,
         allow_mirror_matches=args.allow_mirror_matches,
+        policy_encoder_version=args.encoder_version,
+        record_encoder_version=args.record_encoder_version,
+        rule_service=rule_service,
     )
     logger.info(
         "Self-play done: games=%s decisions=%s p0_wins=%s p1_wins=%s no_winner_terminal=%s unfinished=%s output=%s",

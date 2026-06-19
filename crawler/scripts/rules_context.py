@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -17,6 +18,11 @@ import psycopg2
 import psycopg2.extras
 
 logger = logging.getLogger(__name__)
+
+# ChromaDB's PersistentClient uses Rust bindings that are not thread-safe.
+# All access to _fetch_semantic_rules must go through this lock so that
+# parallel worker threads never enter the Rust layer simultaneously.
+_CHROMA_LOCK = threading.Lock()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -124,25 +130,26 @@ def _fetch_semantic_rules(config: RulesContextConfig, query: str) -> list[dict]:
         logger.warning("Could not load semantic rules from ChromaDB: %s", exc)
         return []
 
-    try:
-        retriever = DMRulesRetriever(config.chroma_path, config.embedding_key)
-        return retriever.search(query, n=config.max_semantic_rules)
-    except ValueError as exc:
-        if config.embedding_key and "embedding function" in str(exc).lower():
-            logger.warning(
-                "ChromaDB embedding function conflict; retrying semantic rules with default embeddings"
-            )
-            try:
-                retriever = DMRulesRetriever(config.chroma_path, None)
-                return retriever.search(query, n=config.max_semantic_rules)
-            except (RuntimeError, ValueError, OSError) as retry_exc:
-                logger.warning("Could not load semantic rules from ChromaDB: %s", retry_exc)
-                return []
-        logger.warning("Could not load semantic rules from ChromaDB: %s", exc)
-        return []
-    except (RuntimeError, OSError) as exc:
-        logger.warning("Could not load semantic rules from ChromaDB: %s", exc)
-        return []
+    with _CHROMA_LOCK:
+        try:
+            retriever = DMRulesRetriever(config.chroma_path, config.embedding_key)
+            return retriever.search(query, n=config.max_semantic_rules)
+        except ValueError as exc:
+            if config.embedding_key and "embedding function" in str(exc).lower():
+                logger.warning(
+                    "ChromaDB embedding function conflict; retrying semantic rules with default embeddings"
+                )
+                try:
+                    retriever = DMRulesRetriever(config.chroma_path, None)
+                    return retriever.search(query, n=config.max_semantic_rules)
+                except (RuntimeError, ValueError, OSError) as retry_exc:
+                    logger.warning("Could not load semantic rules from ChromaDB: %s", retry_exc)
+                    return []
+            logger.warning("Could not load semantic rules from ChromaDB: %s", exc)
+            return []
+        except (RuntimeError, OSError) as exc:
+            logger.warning("Could not load semantic rules from ChromaDB: %s", exc)
+            return []
 
 
 def _format_rule_rows(rows: list[dict]) -> list[str]:

@@ -27,6 +27,14 @@ from typing import Optional
 import psycopg2
 import psycopg2.extras
 from bs4 import BeautifulSoup, Tag
+
+from scripts.king_cell import infer_king_relations
+from scripts.card_validation import (
+    infobox_looks_like_card,
+    is_valid_raw_card,
+    normalize_promo_card,
+    wikitable_looks_like_card,
+)
 from curl_cffi import requests
 from curl_cffi.requests.errors import RequestsError
 
@@ -76,6 +84,8 @@ class RawCard:
     is_multiface: bool = False
     source_url: str = ""
     raw_text: str = ""              # full parsed text dump for debugging
+    king_combine_target_slug: Optional[str] = None
+    king_combine_required_slugs: list[str] = field(default_factory=list)
 
 
 # ── Fetch ─────────────────────────────────────────────────────────────────────
@@ -216,6 +226,8 @@ def _parse_infobox(soup: BeautifulSoup, set_code: str, source_url: str) -> Optio
     aside = soup.find("aside", class_=re.compile(r"portable-infobox|pi-theme"))
     if not aside:
         return None
+    if not infobox_looks_like_card(aside):
+        return None
 
     def get_field(label: str) -> str:
         """Find a field by its data-source or label text."""
@@ -250,7 +262,7 @@ def _parse_infobox(soup: BeautifulSoup, set_code: str, source_url: str) -> Optio
     power = _extract_power(power_str)
 
     civ_str = get_field("civilization") or get_field("civs") or ""
-    civilizations = _parse_civilizations(civ_str)
+    civilizations = _collect_infobox_civilizations(aside) or _parse_civilizations(civ_str)
 
     race_str = get_field("race") or get_field("races") or ""
     races = [_clean(r) for r in re.split(r"[/\n,]", race_str) if _clean(r)]
@@ -319,7 +331,7 @@ def _parse_infobox(soup: BeautifulSoup, set_code: str, source_url: str) -> Optio
         ensure_ascii=False,
     )
 
-    return RawCard(
+    return _finalize_raw_card(RawCard(
         slug=slug,
         name=name,
         cost=cost,
@@ -337,7 +349,7 @@ def _parse_infobox(soup: BeautifulSoup, set_code: str, source_url: str) -> Optio
         is_multiface=is_multiface,
         source_url=source_url,
         raw_text=raw_text,
-    )
+    ), english_text)
 
 
 # ── Legacy wikitable parser ────────────────────────────────────────────────────
@@ -404,6 +416,8 @@ def _parse_wikitable(soup: BeautifulSoup, set_code: str, source_url: str) -> Opt
         return None
 
     primary = next((face for face in face_rows if face["power"]), face_rows[0])
+    if not wikitable_looks_like_card(primary["fields"]):
+        return None
     data = primary["fields"]
 
     card_type = primary["card_type"]
@@ -448,7 +462,7 @@ def _parse_wikitable(soup: BeautifulSoup, set_code: str, source_url: str) -> Opt
         ensure_ascii=False,
     )
 
-    return RawCard(
+    return _finalize_raw_card(RawCard(
         slug=slug,
         name=name,
         cost=cost,
@@ -466,7 +480,7 @@ def _parse_wikitable(soup: BeautifulSoup, set_code: str, source_url: str) -> Opt
         is_multiface=len(face_rows) > 1,
         source_url=source_url,
         raw_text=raw_text,
-    )
+    ))
 
 
 # ── Parse dispatcher ───────────────────────────────────────────────────────────
@@ -479,6 +493,58 @@ def parse_card_page(html: str, set_code: str, source_url: str) -> Optional[RawCa
     return card
 
 
+def _finalize_raw_card(card: RawCard, wikitext: str = "") -> RawCard:
+    fields = {}
+    if card.faces and isinstance(card.faces[0], dict):
+        fields = card.faces[0].get("fields", {})
+    normalize_promo_card(card, fields)
+    target, required = infer_king_relations(card.card_type, wikitext, card.abilities)
+    card.king_combine_target_slug = target
+    card.king_combine_required_slugs = required
+    return card
+
+
+def _collect_infobox_civilizations(aside) -> list[str]:
+    """Read civilization, civilization2, … from Fandom infobox rows."""
+    civs: list[str] = []
+    for row in aside.find_all("div", class_="pi-data"):
+        label = row.find("h3", class_="pi-data-label")
+        if not label or "civilization" not in label.get_text().lower():
+            continue
+        val_el = row.find("div", class_="pi-data-value")
+        if val_el:
+            civs.extend(_parse_civilizations(val_el.get_text()))
+    return sorted(set(civs))
+
+
+def _save_king_relations(cur, card_id: int, card: RawCard) -> None:
+    cur.execute(
+        """
+        DELETE FROM card_relations
+        WHERE card_id = %s AND relation_type IN ('king_combine', 'king_combine_requires')
+        """,
+        (card_id,),
+    )
+    if card.king_combine_target_slug:
+        cur.execute(
+            """
+            INSERT INTO card_relations (card_id, related_slug, relation_type)
+            VALUES (%s, %s, 'king_combine')
+            ON CONFLICT DO NOTHING
+            """,
+            (card_id, card.king_combine_target_slug),
+        )
+    for slug in card.king_combine_required_slugs:
+        cur.execute(
+            """
+            INSERT INTO card_relations (card_id, related_slug, relation_type)
+            VALUES (%s, %s, 'king_combine_requires')
+            ON CONFLICT DO NOTHING
+            """,
+            (card_id, slug),
+        )
+
+
 # ── DB persistence ─────────────────────────────────────────────────────────────
 
 def save_card_to_db(card: RawCard, conn) -> Optional[int]:
@@ -487,6 +553,9 @@ def save_card_to_db(card: RawCard, conn) -> Optional[int]:
     Reprints: cards table gets INSERT ON CONFLICT DO NOTHING,
               card_printings always gets an INSERT for the new set.
     """
+    if not is_valid_raw_card(card):
+        logger.warning("Skipping non-card page (invalid type %r): %s", card.card_type, card.slug)
+        return None
     try:
         with conn.cursor() as cur:
             # Upsert card
@@ -564,6 +633,8 @@ def save_card_to_db(card: RawCard, conn) -> Optional[int]:
                     "INSERT INTO card_keywords (card_id, keyword) VALUES (%s,%s) ON CONFLICT DO NOTHING",
                     (card_id, kw),
                 )
+
+            _save_king_relations(cur, card_id, card)
 
         conn.commit()
         return card_id

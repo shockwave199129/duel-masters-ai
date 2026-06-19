@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS cards (
 );
 
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS faces JSONB;
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS other_face_id INTEGER REFERENCES cards(id);
 
 -- Card civilizations (Fire, Water, etc.) — many-to-many
 CREATE TABLE IF NOT EXISTS card_civilizations (
@@ -117,7 +118,7 @@ CREATE TABLE IF NOT EXISTS card_keywords (
 CREATE TABLE IF NOT EXISTS card_relations (
     card_id       INT REFERENCES cards(id) ON DELETE CASCADE,
     related_slug  TEXT NOT NULL,
-    relation_type TEXT NOT NULL,            -- evolution_source|twin_pact|cross_gear
+    relation_type TEXT NOT NULL,            -- evolution_source|twin_pact|other_face|god_link|...
     PRIMARY KEY (card_id, related_slug, relation_type)
 );
 

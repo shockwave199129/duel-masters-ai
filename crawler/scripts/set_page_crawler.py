@@ -263,9 +263,13 @@ def _parse_set_page(html: str, set_code: str) -> list[dict]:
 
 def _post_filter(cards: list[dict], set_code: str) -> list[dict]:
     """Remove nav/meta links that slipped through section filtering."""
+    from scripts.card_validation import is_card_wiki_title
+
     filtered = []
     for c in cards:
         name = c["card_name"]
+        if not is_card_wiki_title(name):
+            continue
         if any(x in name for x in ("(TCG)", "(OCG)", "(manga)", "(anime)", "(character)")):
             continue
         if len(name) < 2:

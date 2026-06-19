@@ -6,10 +6,12 @@ from typing import Any
 
 from core.actions import Action
 from core.enums import ActionType, CardType, Civilization, Keyword, Phase
+from rules import RuleKnowledgeService
 
 
 ACTION_VECTOR_SIZE_V1 = 14
 ACTION_ENCODER_VERSION = 2
+ACTION_ENCODER_VERSION_V3 = 3
 _ACTION_TYPES = list(ActionType)
 _CIVILIZATIONS = list(Civilization)
 _CARD_TYPES = [
@@ -57,6 +59,40 @@ _TARGET_ZONES = {
     "hyperspatial_zone": 8,
     "ultra_gr_zone": 9,
 }
+_RULE_CATEGORIES = [
+    "win_loss",
+    "turn_structure",
+    "cost_payment",
+    "trigger",
+    "replacement",
+    "keyword",
+    "zone_rule",
+    "special_card",
+    "state_based",
+    "general",
+]
+_ACTION_RULE_REFS = {
+    ActionType.CHARGE_MANA: ("503.1",),
+    ActionType.SUMMON_CREATURE: ("112.2a", "301.1"),
+    ActionType.CAST_SPELL: ("112.2a", "302.1"),
+    ActionType.GENERATE_CROSS_GEAR: ("112.2a", "303.1"),
+    ActionType.CROSS_GEAR: ("112.2a", "303.3b"),
+    ActionType.FORTIFY_CASTLE: ("304.1",),
+    ActionType.DEPLOY_FIELD: ("308.1",),
+    ActionType.EXECUTE_TAMASEED: ("315.1",),
+    ActionType.ATTACK_PLAYER: ("104.2a", "506.1", "509.1"),
+    ActionType.ATTACK_CREATURE: ("506.1", "506.3", "115.3"),
+    ActionType.DECLARE_BLOCKER: ("507.1",),
+    ActionType.DECLARE_GUARDMAN: ("507.1",),
+    ActionType.USE_SHIELD_TRIGGER: ("112.3a", "113.6"),
+    ActionType.USE_S_BACK: ("112.3b", "113.6"),
+    ActionType.USE_NINJA_STRIKE: ("112.3c",),
+    ActionType.USE_G_ZERO: ("112.3e",),
+    ActionType.USE_ATTACK_CHANCE: ("112.3f",),
+    ActionType.USE_G_STRIKE: ("101.4b", "113.6"),
+    ActionType.SELECT_ATTACK_ORDER: ("509.2",),
+    ActionType.PASS: ("500.1",),
+}
 
 
 def _enum_fraction(value, values: list) -> float:
@@ -83,6 +119,10 @@ def _one_hot(value: object, values: list) -> list[float]:
     return [1.0 if value == item else 0.0 for item in values]
 
 
+def _safe_rule_service(rule_service) -> RuleKnowledgeService | None:
+    return rule_service if isinstance(rule_service, RuleKnowledgeService) else rule_service
+
+
 def _extra(action: Action) -> dict[str, Any]:
     return dict(action.extra)
 
@@ -101,6 +141,7 @@ def _action_category(action: Action) -> str:
         ActionType.FORTIFY_CASTLE,
         ActionType.DEPLOY_FIELD,
         ActionType.EXECUTE_TAMASEED,
+        ActionType.COMBINE_KING_CREATURE,
     }:
         return "play_card"
     if action.action_type in {ActionType.ATTACK_PLAYER, ActionType.ATTACK_CREATURE}:
@@ -179,6 +220,52 @@ def _find_target_creature(state, target_uid: str | None):
                 if creature.uid == target_uid:
                     return index, creature
     return None, None
+
+
+def _find_card_in_hand(state, player: int, card_uid: str | None):
+    if state is None or not card_uid:
+        return None
+    return next((card for card in state.players[player].hand if card.uid == card_uid), None)
+
+
+def _find_source_creature(state, action: Action):
+    if state is None or not action.card_uid:
+        return None
+    result = state.find_creature_anywhere(action.card_uid)
+    if result is None:
+        return None
+    return result[1]
+
+
+def _card_keywords(card) -> frozenset[Keyword]:
+    definition = getattr(card, "definition", card)
+    return frozenset(getattr(definition, "keywords", frozenset()) or frozenset())
+
+
+def _card_cost(card) -> int:
+    definition = getattr(card, "definition", card)
+    return int(getattr(definition, "cost", 0) or 0)
+
+
+def _card_power(card, state=None) -> int:
+    if card is None:
+        return 0
+    if hasattr(card, "compute_power"):
+        try:
+            return int(card.compute_power(state) or 0)
+        except TypeError:
+            return int(card.compute_power() or 0)
+    definition = getattr(card, "definition", card)
+    return int(getattr(definition, "power", 0) or 0)
+
+
+def _break_count(card) -> int:
+    definition = getattr(card, "definition", card)
+    try:
+        shields = int(definition.shields_broken())
+    except Exception:
+        shields = 1
+    return 5 if shields >= 999 else max(1, shields)
 
 
 def _target_metadata(action: Action, state) -> list[float]:
@@ -305,6 +392,165 @@ def encode_action_v2(action: Action, state=None, db=None) -> list[float]:
     return features
 
 
+def _charge_action_features(action: Action, state, db) -> list[float]:
+    if action.action_type != ActionType.CHARGE_MANA or state is None:
+        return [0.0] * 6
+    card = _find_card_in_hand(state, action.player, action.card_uid)
+    if card is None:
+        card = _card_from_db(action.card_id, db)
+    if card is None:
+        return [0.0] * 6
+    player_state = state.players[action.player]
+    currently_playable = _bool(_card_cost(card) <= player_state.available_mana)
+    current_civs = player_state.all_mana_civilizations()
+    fixes_color = any(civ not in current_civs for civ in getattr(card, "civilizations", frozenset()))
+    keywords = _card_keywords(card)
+    return [
+        currently_playable,
+        _bool(fixes_color),
+        _bool(Keyword.SHIELD_TRIGGER in keywords),
+        _bool(Keyword.BLOCKER in keywords),
+        _bool(Keyword.SPEED_ATTACKER in keywords),
+        _bool(len(getattr(card, "civilizations", frozenset())) > 1),
+    ]
+
+
+def _play_action_features(action: Action, state, db) -> list[float]:
+    if state is None or not (action.costs_mana() or action.is_free_execution()):
+        return [0.0] * 8
+    card = _card_from_db(action.card_id, db)
+    if card is None:
+        hand_card = _find_card_in_hand(state, action.player, action.card_uid)
+        card = getattr(hand_card, "definition", None)
+    keywords = _card_keywords(card)
+    remaining = _remaining_mana_features(action, state)
+    cost = _card_cost(card)
+    power = _card_power(card)
+    spent_ratio = _norm(len(action.mana_used), 10)
+    return [
+        spent_ratio,
+        remaining[1],
+        _has_followup_play(action, state, db),
+        _norm(cost, 15),
+        _norm(power, 20000),
+        _bool(Keyword.SHIELD_TRIGGER in keywords),
+        _bool(Keyword.SPEED_ATTACKER in keywords),
+        _bool(Keyword.BLOCKER in keywords),
+    ]
+
+
+def _attack_action_features(action: Action, state) -> list[float]:
+    if state is None or not action.is_attack():
+        return [0.0] * 9
+    attacker = _find_source_creature(state, action)
+    controller, target = _find_target_creature(state, action.target_uid)
+    defender = 1 - action.player
+    defender_shields = state.players[defender].shield_count
+    attacker_power = _card_power(attacker, state)
+    target_power = _card_power(target, state)
+    breaks = _break_count(attacker)
+    direct_win = action.action_type == ActionType.ATTACK_PLAYER and defender_shields == 0
+    breaks_all = action.action_type == ActionType.ATTACK_PLAYER and defender_shields > 0 and breaks >= defender_shields
+    trade_delta = 0.0
+    if target is not None:
+        trade_delta = max(-1.0, min(1.0, (attacker_power - target_power) / 20000.0))
+    opp_blockers = sum(
+        1
+        for creature in state.players[defender].battle_zone
+        if getattr(creature, "is_blocker", lambda: False)() and not creature.is_tapped
+    )
+    return [
+        _norm(attacker_power, 20000),
+        _norm(target_power, 20000),
+        _norm(breaks, 5),
+        _bool(direct_win),
+        _bool(breaks_all),
+        trade_delta,
+        _norm(opp_blockers, 8),
+        _bool(target is not None and attacker_power >= target_power),
+        _bool(controller == defender if controller is not None else False),
+    ]
+
+
+def _block_action_features(action: Action, state) -> list[float]:
+    if state is None or action.action_type not in {ActionType.DECLARE_BLOCKER, ActionType.DECLARE_GUARDMAN}:
+        return [0.0] * 7
+    blocker = _find_source_creature(state, action)
+    ctx = state.attack_context
+    attacker = None
+    if ctx is not None:
+        result = state.find_creature_anywhere(ctx.attacker_uid)
+        attacker = result[1] if result is not None else None
+    blocker_power = _card_power(blocker, state)
+    attacker_power = _card_power(attacker, state)
+    saves_direct_loss = bool(ctx and ctx.is_attacking_player and state.players[action.player].shield_count == 0)
+    attacker_breaks = _break_count(attacker)
+    trade_delta = max(-1.0, min(1.0, (blocker_power - attacker_power) / 20000.0)) if attacker else 0.0
+    return [
+        _norm(blocker_power, 20000),
+        _norm(attacker_power, 20000),
+        _bool(saves_direct_loss),
+        _norm(attacker_breaks, 5),
+        trade_delta,
+        _bool(blocker is not None and attacker is not None and blocker_power >= attacker_power),
+        _bool(action.action_type == ActionType.DECLARE_GUARDMAN),
+    ]
+
+
+def _choice_action_features(action: Action) -> list[float]:
+    return [
+        _bool(action.choice is True),
+        _bool(action.choice is False),
+        _norm(len(action.selected_uids), 10),
+        _bool(action.selected_civ is not None),
+        _bool(action.target_zone),
+    ]
+
+
+def _rule_action_features(action: Action, rule_service=None) -> list[float]:
+    refs = _ACTION_RULE_REFS.get(action.action_type, ())
+    categories = set()
+    priorities: list[int] = []
+    service = _safe_rule_service(rule_service)
+    if service is not None and refs:
+        for fact in service.get_rules(refs).values():
+            categories.add(fact.rule_category)
+            priorities.append(fact.priority)
+    fallback_categories = {
+        ActionType.CHARGE_MANA: {"turn_structure"},
+        ActionType.PASS: {"turn_structure"},
+        ActionType.ATTACK_PLAYER: {"turn_structure", "win_loss"},
+        ActionType.ATTACK_CREATURE: {"turn_structure"},
+        ActionType.DECLARE_BLOCKER: {"keyword", "turn_structure"},
+        ActionType.USE_SHIELD_TRIGGER: {"trigger"},
+        ActionType.USE_G_STRIKE: {"trigger"},
+        ActionType.USE_NINJA_STRIKE: {"keyword"},
+    }
+    categories.update(fallback_categories.get(action.action_type, set()))
+    if action.costs_mana():
+        categories.add("cost_payment")
+    if action.is_free_execution():
+        categories.add("trigger")
+    priority = min(priorities, default=100)
+    return [
+        _norm(len(refs), 4),
+        _norm(priority, 100),
+        *[1.0 if category in categories else 0.0 for category in _RULE_CATEGORIES],
+    ]
+
+
+def encode_action_v3(action: Action, state=None, db=None, *, rule_service=None) -> list[float]:
+    """Encode a legal action with v2 features plus rule-aware tactical context."""
+    features = encode_action_v2(action, state=state, db=db)
+    features.extend(_charge_action_features(action, state, db))
+    features.extend(_play_action_features(action, state, db))
+    features.extend(_attack_action_features(action, state))
+    features.extend(_block_action_features(action, state))
+    features.extend(_choice_action_features(action))
+    features.extend(_rule_action_features(action, rule_service))
+    return features
+
+
 def feature_schema_v2() -> dict[str, object]:
     return {
         "version": ACTION_ENCODER_VERSION,
@@ -318,5 +564,16 @@ def feature_schema_v2() -> dict[str, object]:
     }
 
 
+def feature_schema_v3() -> dict[str, object]:
+    return {
+        "version": ACTION_ENCODER_VERSION_V3,
+        "base_version": ACTION_ENCODER_VERSION,
+        "action_types": [action_type.value for action_type in _ACTION_TYPES],
+        "rule_categories": list(_RULE_CATEGORIES),
+        "vector_size": ACTION_VECTOR_SIZE_V3,
+    }
+
+
 ACTION_VECTOR_SIZE_V2 = len(encode_action_v2(Action(player=0, action_type=ActionType.PASS)))
-ACTION_VECTOR_SIZE = ACTION_VECTOR_SIZE_V2
+ACTION_VECTOR_SIZE_V3 = len(encode_action_v3(Action(player=0, action_type=ActionType.PASS)))
+ACTION_VECTOR_SIZE = ACTION_VECTOR_SIZE_V3
