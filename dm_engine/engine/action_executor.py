@@ -25,6 +25,32 @@ from engine.zone_mover import (
 )
 
 
+def _apply_twinpact_face(old_def, chars):
+    """
+    Create a new CardDefinition with the other face's characteristics.
+    Used during Twinpact face selection (Rule 810.3).
+    """
+    from core.cards import CardDefinition as _CD
+    return _CD(
+        id=old_def.id,
+        slug=old_def.slug,
+        name=old_def.name,
+        cost=chars["cost"],
+        power=chars.get("power"),
+        card_type=chars.get("card_type", old_def.card_type),
+        card_subtype=chars.get("card_subtype", old_def.card_subtype),
+        civilizations=chars.get("civilizations", old_def.civilizations),
+        races=chars.get("races", old_def.races),
+        keywords=chars.get("keywords", old_def.keywords),
+        effects=old_def.effects,
+        evolution_source_races=old_def.evolution_source_races,
+        evolution_source_types=old_def.evolution_source_types,
+        is_multiface=old_def.is_multiface,
+        other_face_id=old_def.other_face_id,
+        twinpact_other_face=old_def.twinpact_other_face,
+    )
+
+
 def execute_action(state: GameState, action: Action, db=None, validate: bool = True) -> GameState:
     """
     Apply one action and return a new GameState.
@@ -76,6 +102,13 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
             if gr_def is None:
                 raise ValueError(f"GR card {action.card_id} not found in Ultra GR zone for player {action.player}")
             creature = move_ultra_gr_to_battle(s, action.player, gr_def)
+        # Rule 810.3: Twinpact face selection — apply other face's characteristics
+        twinpact_face = dict(action.extra).get("twinpact_face")
+        if twinpact_face is not None and twinpact_face != 0:
+            from core.cards import get_twinpact_characteristics
+            chars = get_twinpact_characteristics(creature.definition, twinpact_face)
+            creature.definition = _apply_twinpact_face(creature.definition, chars)
+            creature.twinpact_face = twinpact_face
         s.record_action(action_type, action.player, action.card_id, creature.uid)
 
     elif action_type == ActionType.CAST_SPELL:

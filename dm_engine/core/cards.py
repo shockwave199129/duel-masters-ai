@@ -119,6 +119,13 @@ class CardDefinition:
     god_glink_open_sides: frozenset[str] = frozenset()
     psychic_super_cell_slugs: frozenset[str] = frozenset()
 
+    # Twinpact other-face characteristics (Rule 810.3)
+    # Populated from DB when loading cards for play.  Full DB resolution of the
+    # other face is deferred; this dict stores the needed characteristics so
+    # that face selection at summon time is well-defined.
+    # Keys: cost, power, card_type, card_subtype, civilizations, races, keywords
+    twinpact_other_face: Optional[dict] = None
+
     # Infinity power (Rule 108.1c) — if True, this creature has ∞ power
     is_infinite_power: bool = False
 
@@ -371,6 +378,59 @@ def get_other_face(card_def: CardDefinition, card_db=None) -> Optional[CardDefin
     if card_db is not None:
         return card_db.get(card_def.other_face_id)
     return None
+
+
+def get_other_face(card_def: CardDefinition, card_db=None) -> Optional[CardDefinition]:
+    """
+    Resolve the other-face CardDefinition for a multi-face card.
+
+    If card_db is None or other_face_id is None, returns None.
+    This is a stub for when card database resolution is available.
+    """
+    if card_def.other_face_id is None:
+        return None
+    if card_db is not None:
+        return card_db.get(card_def.other_face_id)
+    return None
+
+
+def get_twinpact_characteristics(card_def: CardDefinition, face: int) -> dict:
+    """
+    Rule 810.3: Return the characteristics for the chosen face of a Twinpact card.
+
+    Parameters
+    ----------
+    card_def : CardDefinition
+        The card definition (always face 0 / default).
+    face : int
+        0 = default face (card's own characteristics),
+        1 = other face (from twinpact_other_face dict).
+
+    Returns
+    -------
+    dict with keys: cost, power, card_type, card_subtype, civilizations, races, keywords
+    """
+    if face == 0 or not card_def.twinpact_other_face:
+        return {
+            "cost": card_def.cost,
+            "power": card_def.power,
+            "card_type": card_def.card_type,
+            "card_subtype": card_def.card_subtype,
+            "civilizations": card_def.civilizations,
+            "races": card_def.races,
+            "keywords": card_def.keywords,
+        }
+
+    of = card_def.twinpact_other_face
+    return {
+        "cost": of.get("cost", card_def.cost),
+        "power": of.get("power", card_def.power),
+        "card_type": of.get("card_type", card_def.card_type),
+        "card_subtype": of.get("card_subtype", card_def.card_subtype),
+        "civilizations": of.get("civilizations", card_def.civilizations),
+        "races": of.get("races", card_def.races),
+        "keywords": of.get("keywords", card_def.keywords),
+    }
 
 
 def is_hyper_mode(card_def: CardDefinition) -> bool:

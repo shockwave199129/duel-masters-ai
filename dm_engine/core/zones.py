@@ -326,6 +326,9 @@ class Creature:
     # King Cell combine tracking (rule 814)
     is_king_cell:        bool = False        # True when part of a combined King Creature
 
+    # Twinpact face selection (Rule 810.3) — which face was chosen at summon time
+    twinpact_face:       int = 0
+
     # Static ability tracking — which CardEffect refs are currently applied
     static_effects:      list = field(default_factory=list)  # list[CardEffect] currently active
 
