@@ -61,6 +61,18 @@ def _check_once(state: GameState) -> tuple[GameState, bool]:
     if _sba_smax_uniqueness(s):
         any_fired = True
 
+    if _sba_star_evolution_uniqueness(s):
+        any_fired = True
+
+    if _sba_dream_rare_uniqueness(s):
+        any_fired = True
+
+    if _sba_duel_mate_cleanup(s):
+        any_fired = True
+
+    if _sba_g_castle_shield(s):
+        any_fired = True
+
     # Re-evaluate static effects for all creatures in battle zones.
     # Cascading SBA changes (e.g. a creature died, removing its aura) may cause
     # other creatures to gain/lose power or keywords, potentially triggering
@@ -810,3 +822,164 @@ def _destroy_creature(
             died_on_turn=state.turn_number,
         )
     )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Star Evolution uniqueness (rule 813)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sba_star_evolution_uniqueness(state: GameState) -> bool:
+    """
+    Rule 813: Star Evolution creatures must be unique in the Battle Zone.
+    Only one of each Star Evolution card_id per player is allowed.
+
+    If duplicates are found, keep the one that entered most recently
+    (highest entered_turn), send extras to the graveyard.
+    """
+    from core.cards import is_star_evolution
+
+    fired = False
+    for player_idx in range(2):
+        star_evos = [
+            c for c in state.players[player_idx].battle_zone
+            if is_star_evolution(c)
+        ]
+
+        # Group by card_id
+        by_id: dict[int, list] = {}
+        for creature in star_evos:
+            cid = creature.definition.id
+            by_id.setdefault(cid, []).append(creature)
+
+        for cid, creatures in by_id.items():
+            if len(creatures) <= 1:
+                continue
+            # Keep the one with the highest entered_turn (most recent)
+            creatures.sort(key=lambda c: c.entered_turn, reverse=True)
+            for creature in creatures[1:]:
+                state.players[player_idx].battle_zone.remove(creature)
+                state.global_effects.remove_by_source(creature.uid)
+                state.players[player_idx].graveyard.insert(
+                    0,
+                    GraveyardCard(
+                        definition=creature.definition,
+                        uid=creature.uid,
+                        died_from="sba_star_evo_duplicate",
+                        died_on_turn=state.turn_number,
+                    ),
+                )
+                fired = True
+
+    return fired
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dream Rare uniqueness (rule 817)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sba_dream_rare_uniqueness(state: GameState) -> bool:
+    """
+    Rule 817: Dream Rare creatures must be unique per player.
+    Only one of each Dream Rare card_id per player is allowed.
+
+    If duplicates are found, keep the one that entered most recently,
+    send extras to the graveyard.
+    """
+    fired = False
+    for player_idx in range(2):
+        dream_rares = [
+            c for c in state.players[player_idx].battle_zone
+            if c.definition.card_subtype == CardSubtype.DREAM
+        ]
+
+        # Group by card_id
+        by_id: dict[int, list] = {}
+        for creature in dream_rares:
+            cid = creature.definition.id
+            by_id.setdefault(cid, []).append(creature)
+
+        for cid, creatures in by_id.items():
+            if len(creatures) <= 1:
+                continue
+            # Keep the one with the highest entered_turn (most recent)
+            creatures.sort(key=lambda c: c.entered_turn, reverse=True)
+            for creature in creatures[1:]:
+                state.players[player_idx].battle_zone.remove(creature)
+                state.global_effects.remove_by_source(creature.uid)
+                state.players[player_idx].graveyard.insert(
+                    0,
+                    GraveyardCard(
+                        definition=creature.definition,
+                        uid=creature.uid,
+                        died_from="sba_dream_rare_duplicate",
+                        died_on_turn=state.turn_number,
+                    ),
+                )
+                fired = True
+
+    return fired
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Duel Mate cleanup (rule 820)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sba_duel_mate_cleanup(state: GameState) -> bool:
+    """
+    Rule 820: Duel Mates that are in the Battle Zone but not properly
+    summoned should be moved to the Hyperspatial Zone.
+
+    Simplified implementation: for now, check for creatures with the
+    _duel_mate temp_flag in the battle zone that have
+    has_summoning_sickness == False and weren't properly summoned.
+    Move them to the Hyperspatial Zone as HyperspatialCard objects.
+    """
+    fired = False
+    for player_idx in range(2):
+        duel_mates = [
+            c for c in state.players[player_idx].battle_zone
+            if c.temp_flags.get("_duel_mate", False)
+        ]
+
+        for creature in duel_mates:
+            # If this Duel Mate wasn't properly summoned (no summoning sickness
+            # but flagged), move to hyperspatial
+            if not creature.has_summoning_sickness:
+                creature.remove_static_effects(state)
+                state.players[player_idx].battle_zone.remove(creature)
+                state.global_effects.remove_by_source(creature.uid)
+                state.players[creature.owner].hyperspatial_zone.append(
+                    creature_to_hyperspatial_card(creature)
+                )
+                fired = True
+
+    return fired
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G-Castle shield zone (rule 822)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sba_g_castle_shield(state: GameState) -> bool:
+    """
+    Rule 822: G-Castle cards that leave the Shield Zone go to the Graveyard
+    instead of the hand.
+
+    This SBA checks for G-Castle cards in the shield zone and ensures they
+    are properly handled. When a G-Castle shield is broken, it goes to the
+    graveyard directly (handled in move_standby_shield_to_hand via G-Castle
+    detection). This SBA catches any other case where a G-Castle is in the
+    shield zone needing resolution.
+    """
+    fired = False
+    for player_idx in range(2):
+        shield = state.players[player_idx].shield_zone
+        g_castle_shields = [
+            s for s in shield
+            if s.definition.card_subtype == CardSubtype.G_CASTLE
+        ]
+        # G-Castle shields are handled in shield-break flow (zone_mover.py).
+        # This SBA is a safety net: if a G-Castle somehow ends up in the
+        # standby queue, it goes to graveyard not hand.
+        # (Currently a no-op placeholder since shield-break flow handles it.)
+
+    return fired

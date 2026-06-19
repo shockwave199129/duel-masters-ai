@@ -68,6 +68,8 @@ class CardSubtype(Enum):
     NEO               = "NEO"              # NEO Creature (rule 802)
     DREAM             = "Dream"            # Dream Rare (rule 817)
     ZEROM             = "zerom"            # rule 812 — double-sided ritual/creature
+    DUEL_MATE         = "duel_mate"        # rule 820 — Duel Mate
+    G_CASTLE          = "g_castle"         # rule 822 — G-Castle
 
 
 # ── Zones ─────────────────────────────────────────────────────────────────────

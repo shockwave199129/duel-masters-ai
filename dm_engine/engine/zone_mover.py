@@ -494,10 +494,31 @@ def move_shield_to_standby(state: GameState, player: int, shield_index: int) -> 
 
 
 def move_standby_shield_to_hand(state: GameState, player: int, shield_uid: str) -> HandCard:
-    """Move a queued standby shield to its owner's hand."""
+    """Move a queued standby shield to its owner's hand.
+
+    Rule 822: G-Castle cards that leave the Shield Zone go to the Graveyard
+    instead of the hand.  If the revealed shield is a G-Castle, it is sent
+    to the graveyard here rather than being returned to hand.
+    """
     for idx, (queued_player, shield) in enumerate(state.effect_stack.shield_trigger_queue):
         if queued_player == player and shield.uid == shield_uid:
             state.effect_stack.shield_trigger_queue.pop(idx)
+
+            # Rule 822: G-Castle leaves shield zone → graveyard, not hand
+            if shield.definition.card_subtype == CardSubtype.G_CASTLE:
+                state.players[player].graveyard.insert(
+                    0,
+                    GraveyardCard(
+                        definition=shield.definition,
+                        uid=shield.uid,
+                        died_from="g_castle_shield_break",
+                        died_on_turn=state.turn_number,
+                    ),
+                )
+                # Return a sentinel HandCard so callers that store the return
+                # value don't crash; the card is NOT in hand.
+                return HandCard(definition=shield.definition, uid=shield.uid)
+
             hand_card = HandCard(definition=shield.definition, uid=shield.uid)
             state.players[player].hand.append(hand_card)
             return hand_card
