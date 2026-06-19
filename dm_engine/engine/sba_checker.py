@@ -929,16 +929,17 @@ def _sba_duel_mate_cleanup(state: GameState) -> bool:
     Rule 820: Duel Mates that are in the Battle Zone but not properly
     summoned should be moved to the Hyperspatial Zone.
 
-    Simplified implementation: for now, check for creatures with the
-    _duel_mate temp_flag in the battle zone that have
-    has_summoning_sickness == False and weren't properly summoned.
+    Checks for creatures whose definition has card_subtype == DUEL_MATE
+    and that have has_summoning_sickness == False (not properly summoned).
     Move them to the Hyperspatial Zone as HyperspatialCard objects.
     """
+    from core.cards import is_duel_mate
+
     fired = False
     for player_idx in range(2):
         duel_mates = [
             c for c in state.players[player_idx].battle_zone
-            if c.temp_flags.get("_duel_mate", False)
+            if is_duel_mate(c.definition)
         ]
 
         for creature in duel_mates:
