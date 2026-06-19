@@ -1232,10 +1232,11 @@ def _compute_effective_cost(
                 if race in creature.races:
                     modification -= 1
 
-    # ── Global cost modifiers from card_effects rows ───────────────────────
-    # (Full implementation queries active COST_MOD effects from state.)
-    # Placeholder: no global cost mods by default.
+    # ── Global cost modifiers from active card effects ───────────────────
+    global_mod = state.global_effects.get_cost_modifiers(player, defn.card_id)
+    modification += global_mod
 
+    # ── Clamp to zero (cost cannot go negative) ────────────────────────
     effective = max(0, base_cost + modification)
     return effective
 

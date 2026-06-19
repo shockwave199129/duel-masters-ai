@@ -359,6 +359,10 @@ class GlobalEffectType(Enum):
     CANNOT_ATTACK                = "cannot_attack_global"
     CANNOT_CHARGE_MANA           = "cannot_charge_mana"
 
+    # ── Cost modifications ────────────────────────────────────────────────────
+    COST_REDUCE                  = "cost_reduce"                   # spells cost less
+    COST_INCREASE                = "cost_increase"                 # spells cost more
+
     # ── Power modifications (global) ──────────────────────────────────────────
     ALL_CREATURES_POWER_MOD      = "all_creatures_power_mod"       # +/- power to all
     ALL_CREATURES_POWER_FIX      = "all_creatures_power_fix"       # rule 206.3 fix

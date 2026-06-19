@@ -62,6 +62,11 @@ class GlobalEffect:
     power_mod_amount:  int = 0
     power_mod_target:  Optional[str] = None   # "own" | "opponent" | None (all)
 
+    # ── COST_REDUCE / COST_INCREASE ────────────────────────────────────────────
+    # "Spells cost 1 less to cast" → COST_REDUCE with cost_mod_amount=1
+    # "Spells cost 1 more to cast" → COST_INCREASE with cost_mod_amount=1
+    cost_mod_amount:   int = 0
+
     # ── CANNOT_ATTACK ─────────────────────────────────────────────────────────
     # Target player's creatures can't attack — no extra params needed
 
@@ -317,6 +322,33 @@ class GlobalEffectRegistry:
                 sign = "+" if eff.power_mod_amount >= 0 else ""
                 result.append(f"All creatures: {sign}{eff.power_mod_amount} power")
         return result
+
+    # ── Cost modification ──────────────────────────────────────────────────────────
+
+    def get_cost_modifiers(self, player: int, card_id: int) -> int:
+        """
+        Returns the total cost modification (positive = increase, negative = reduction)
+        for the given card from active COST_REDUCE and COST_INCREASE global effects.
+
+        Rule 112.2b: cost modifiers apply before mana combo generation.
+        Used during action generation to compute effective cast cost.
+
+        Args:
+            player: player index whose perspective is relevant
+            card_id: the card being checked for cost modifications (for future use)
+
+        Returns:
+            net modification: positive = cost increases, negative = cost reduces
+        """
+        total = 0
+        for eff in self.effects:
+            if not eff.affects_player(player):
+                continue
+            if eff.effect_type == GlobalEffectType.COST_REDUCE:
+                total -= eff.cost_mod_amount
+            elif eff.effect_type == GlobalEffectType.COST_INCREASE:
+                total += eff.cost_mod_amount
+        return total
 
     def get_granted_keywords(
         self,
