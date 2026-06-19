@@ -122,6 +122,14 @@ class CardDefinition:
     # Infinity power (Rule 108.1c) — if True, this creature has ∞ power
     is_infinite_power: bool = False
 
+    # Hyper Soul X (rule 818) — STUB: not yet implemented
+    # Abilities granted when this card is underneath a creature as an evolution card
+    hyper_soul_abilities: list[str] = field(default_factory=list)
+
+    # WD Field (rule 819) — STUB: not yet implemented
+    # Two field faces for WD Field double-sided cards; each face is a dict of properties
+    wd_field_faces: tuple[dict, dict] = ()
+
     def is_creature(self) -> bool:
         return self.card_type == CardType.CREATURE
 
@@ -237,6 +245,18 @@ def is_g_castle(card_def: CardDefinition) -> bool:
     return card_def.card_subtype == CardSubtype.G_CASTLE
 
 
+# ── Hyper Soul X helpers (rule 818) — STUB ────────────────────────────────────
+def is_hyper_soul_x(card_def: CardDefinition) -> bool:
+    """Check if a card is a Hyper Soul X (rule 818). STUB: not yet implemented."""
+    return card_def.card_subtype == CardSubtype.HYPER_SOUL_X
+
+
+# ── WD Field helpers (rule 819) — STUB ────────────────────────────────────────
+def is_wd_field(card_def: CardDefinition) -> bool:
+    """Check if a card is a WD Field (rule 819). STUB: not yet implemented."""
+    return card_def.card_subtype == CardSubtype.WD_FIELD
+
+
 # ── Deck Definition ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -277,6 +297,18 @@ class DeckDefinition:
         hyperspatial_total = sum(self.hyperspatial_counts.values())
         if hyperspatial_total > 8:
             return False
+
+        # STUB: Reject unimplemented card subtypes (Hyper Soul X, WD Field)
+        # These card types are defined as enums but their mechanics are not yet
+        # implemented. Decks containing them are considered invalid.
+        from .enums import CardSubtype
+        for card_id in self.card_counts.keys():
+            defn = self.card_definitions.get(card_id)
+            if defn is not None and defn.card_subtype in (
+                CardSubtype.HYPER_SOUL_X,
+                CardSubtype.WD_FIELD,
+            ):
+                return False
         if any(count <= 0 for count in self.hyperspatial_counts.values()):
             return False
         if any(count > MAX_COPIES_PER_CARD for count in self.hyperspatial_counts.values()):
