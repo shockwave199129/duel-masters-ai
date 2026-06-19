@@ -12,7 +12,7 @@ from typing import Optional
 from core.enums import ManaUsage, CardSubtype
 from core.state import GameState
 from core.zones import Creature, EvolutionStackEntry, GraveyardCard, HandCard, ManaCard, ShieldCard, HyperspatialCard, _new_uid
-from core.cards import is_twinpact, is_forbidden, get_other_face, is_hyper_mode
+from core.cards import is_twinpact, is_forbidden, get_other_face, is_hyper_mode, is_g_castle
 
 
 def creature_to_hyperspatial_card(creature: Creature) -> HyperspatialCard:
@@ -207,6 +207,25 @@ def move_battle_to_hyperspatial(
     owner = creature.owner
     state.players[owner].hyperspatial_zone.append(creature_to_hyperspatial_card(creature))
     return creature
+
+def move_hand_to_hyperspatial(
+    state: GameState,
+    player: int,
+    hand_card_uid: str,
+) -> HyperspatialCard:
+    """
+    Move a card from the hand directly into the Hyperspatial Zone (rule 820).
+
+    Used for Duel Mate cards returned to the Hyperspatial Zone, as well as
+    other effects that place hand cards into hyperspatial.
+    """
+    hand_card = _remove_from_hand(state, player, hand_card_uid)
+    h_card = HyperspatialCard(
+        definition=hand_card.definition,
+        uid=hand_card.uid,
+    )
+    state.players[player].hyperspatial_zone.append(h_card)
+    return h_card
 
 
 def move_battle_to_graveyard(
@@ -465,6 +484,29 @@ def fortify_shield_with_castle(
         raise ValueError(f"Shield {shield_uid} not found")
     shield.fortified_castles.append(hand_card.definition)
     return shield
+def fortify_g_castle_to_shield(
+    state: GameState,
+    player: int,
+    castle_uid: str,
+    shield_uid: str,
+) -> ShieldCard:
+    """
+    Rule 822: Move a G-Castle from hand underneath one of its owner's shields.
+
+    Unlike regular castles, G-Castle cards have special behavior:
+    - They are placed under a shield (tracked via fortified_castles)
+    - When the shield breaks, the G-Castle goes to graveyard (not hand)
+    """
+    hand_card = _remove_from_hand(state, player, castle_uid)
+    if not is_g_castle(hand_card.definition):
+        raise ValueError(f"Card {hand_card.definition.name} is not a G-Castle")
+    shield = state.players[player].find_shield(shield_uid)
+    if shield is None:
+        raise ValueError(f"Shield {shield_uid} not found")
+    shield.fortified_castles.append(hand_card.definition)
+    return shield
+
+
 
 
 def draw_card(state: GameState, player: int) -> Optional[HandCard]:
@@ -540,6 +582,20 @@ def move_standby_shield_to_hand(state: GameState, player: int, shield_uid: str) 
                 # Return a sentinel HandCard so callers that store the return
                 # value don't crash; the card is NOT in hand.
                 return HandCard(definition=shield.definition, uid=shield.uid)
+
+            # Rule 822: Fortified G-Castles on this shield also go to graveyard
+            for fortified_defn in shield.fortified_castles:
+                if fortified_defn.card_subtype == CardSubtype.G_CASTLE:
+                    state.players[player].graveyard.insert(
+                        0,
+                        GraveyardCard(
+                            definition=fortified_defn,
+                            uid=f"fortified-{fortified_defn.id}-{shield.uid}",
+                            died_from="g_castle_shield_break",
+                            died_on_turn=state.turn_number,
+                        ),
+                    )
+            shield.fortified_castles.clear()
 
             hand_card = HandCard(definition=shield.definition, uid=shield.uid)
             state.players[player].hand.append(hand_card)
