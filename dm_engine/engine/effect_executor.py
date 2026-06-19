@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 
-from core.cards import CardDefinition
+from core.cards import CardDefinition, is_hyper_mode
 from core.enums import EffectAction
 from core.state import AwaitedChoice, GameState, PendingTrigger
 from core.zones import Creature, HandCard, ManaCard, ShieldCard, PowerModifier
@@ -27,6 +27,7 @@ from engine.zone_mover import (
     move_hand_to_shield,
     move_shield_to_standby,
     move_ultra_gr_to_battle,
+    swap_hyper_mode,
     tap_mana_for_payment,
 )
 
@@ -642,7 +643,19 @@ def _do_hyperize(state: GameState, controller: int, trigger: PendingTrigger) -> 
     if not found:
         return
     _, creature = found
-    creature.hyper_mode_released = True
+    if creature.hyper_mode_released:
+        # Already released — nothing to do
+        return
+    if not is_hyper_mode(creature.definition):
+        # Not a Hyper Mode creature — just set flag as fallback
+        creature.hyper_mode_released = True
+        return
+    # Remove old static effects before swapping definition
+    creature.remove_static_effects(state)
+    # Perform the card definition swap
+    swap_hyper_mode(creature)
+    # Re-apply static effects from the released face
+    creature.apply_static_effects(state)
 
 
 def _do_awaken(state: GameState, controller: int, trigger: PendingTrigger) -> None:

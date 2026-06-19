@@ -210,7 +210,28 @@ def is_zerom(card_def: CardDefinition) -> bool:
 
 def is_zerom_creature(creature: "Creature") -> bool:
     """Check if a creature is a Zerom that has been flipped to its creature side."""
-    return bool(creature.temp_flags.get("_zerom_flipped"))
+    return bool(creature.temp_flags.get("_zerom_flipped"))# ── Star Evolution helpers (rule 813) ──────────────────────────────────────────
+def is_star_evolution(creature: "Creature") -> bool:
+    """Check if a creature is a Star Evolution (rule 813)."""
+    return bool(creature.temp_flags.get("_is_star_evolution", False))
+
+
+# ── Dream Rare helpers (rule 817) ─────────────────────────────────────────────
+def is_dream_rare(card_def: CardDefinition) -> bool:
+    """Check if a card is a Dream Rare (rule 817)."""
+    return card_def.card_subtype == CardSubtype.DREAM
+
+
+# ── Duel Mate helpers (rule 820) ─────────────────────────────────────────────
+def is_duel_mate(card_def: CardDefinition) -> bool:
+    """Check if a card is a Duel Mate (rule 820)."""
+    return card_def.card_subtype == CardSubtype.DUEL_MATE
+
+
+# ── G-Castle helpers (rule 822) ──────────────────────────────────────────────
+def is_g_castle(card_def: CardDefinition) -> bool:
+    """Check if a card is a G-Castle (rule 822)."""
+    return card_def.card_subtype == CardSubtype.G_CASTLE
 
 
 # ── Deck Definition ───────────────────────────────────────────────────────────
@@ -317,5 +338,21 @@ def get_other_face(card_def: CardDefinition, card_db=None) -> Optional[CardDefin
     return None
 
 
-# ── Constants imported for convenience ────────────────────────────────────────
+def is_hyper_mode(card_def: CardDefinition) -> bool:
+    """
+    Check if a card has Hyper Mode capabilities (rule 816).
+
+    Heuristic: the card must have an other_face_id (double-faced) and
+    possess the HYPERIZE keyword in its keywords set or the HYPERIZE
+    effect_action in its parsed effects.
+    """
+    if card_def.other_face_id is None:
+        return False
+    from .enums import Keyword, EffectAction
+    if Keyword.HYPERIZE in card_def.keywords:
+        return True
+    return any(e.effect_action == EffectAction.HYPERIZE for e in card_def.effects)
+
+
+# ── Constants imported for convenience ───────────────────────────────────────────────────────────
 from .enums import MAX_DECK_SIZE, MAX_COPIES_PER_CARD

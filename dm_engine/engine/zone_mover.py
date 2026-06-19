@@ -12,7 +12,7 @@ from typing import Optional
 from core.enums import ManaUsage, CardSubtype
 from core.state import GameState
 from core.zones import Creature, EvolutionStackEntry, GraveyardCard, HandCard, ManaCard, ShieldCard, HyperspatialCard, _new_uid
-from core.cards import is_twinpact, is_forbidden, get_other_face
+from core.cards import is_twinpact, is_forbidden, get_other_face, is_hyper_mode
 
 
 def creature_to_hyperspatial_card(creature: Creature) -> HyperspatialCard:
@@ -1020,6 +1020,48 @@ def flip_forbidden(creature: Creature) -> Creature:
         return creature
     creature.temp_flags["_forbidden_flipped"] = not creature.temp_flags.get("_forbidden_flipped", False)
     creature.face = 1 - creature.face
+    return creature
+
+def swap_hyper_mode(creature: Creature) -> Creature:
+    """
+    Swap a Hyper Mode creature to its released face (rule 816).
+
+    If the creature has an other_face_id and is currently in the
+    released state (hyper_mode_released=True), swap its definition
+    to the other face. This changes the creature's abilities and
+    potentially its power.
+
+    Returns the modified creature (same object, mutated).
+    """
+    if not is_hyper_mode(creature.definition):
+        return creature
+    if creature.definition.other_face_id is None:
+        return creature
+    if creature.hyper_mode_released:
+        # Already released — no swap needed
+        return creature
+
+    old_def = creature.definition
+    from core.cards import CardDefinition as _CD
+    new_def = _CD(
+        id=old_def.other_face_id,
+        slug=old_def.slug,
+        name=old_def.name,
+        cost=old_def.cost,
+        power=old_def.power,
+        card_type=old_def.card_type,
+        card_subtype=old_def.card_subtype,
+        civilizations=old_def.civilizations,
+        races=old_def.races,
+        keywords=old_def.keywords,
+        effects=old_def.effects,
+        evolution_source_races=old_def.evolution_source_races,
+        evolution_source_types=old_def.evolution_source_types,
+        is_multiface=old_def.is_multiface,
+        other_face_id=old_def.id,  # point back to the original
+    )
+    creature.definition = new_def
+    creature.hyper_mode_released = True
     return creature
 
 
