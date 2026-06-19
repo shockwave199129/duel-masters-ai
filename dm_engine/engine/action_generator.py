@@ -262,6 +262,31 @@ def _generate_main_actions(state: GameState, db=None) -> list[Action]:
         )
         actions.extend(card_actions)
 
+    # ── GR creatures from Ultra GR zone (rule 408, 701.30) ─────────────────
+    # GR creatures can be summoned from the Ultra GR zone during the main phase.
+    # They require paying their mana cost and enter with summoning sickness.
+    for gr_def in p_state.ultra_gr_zone:
+        if gr_def.card_type != CardType.CREATURE:
+            continue
+        if gr_def.card_subtype != CardSubtype.GR:
+            continue
+        # Global restriction check
+        if not state.global_effects.can_summon_creature(
+            player,
+            gr_def.civilizations,
+            card_type=gr_def.card_type.value,
+            card_subtype=gr_def.card_subtype.value,
+        ):
+            continue
+        effective_cost = _compute_effective_cost(gr_def, state, player)
+        combos = _get_mana_combinations(
+            p_state.mana_zone, effective_cost, gr_def.civilizations
+        )
+        for combo in combos:
+            actions.append(summon_creature(
+                player, "", gr_def.id, combo,
+            ))
+
     # ── Cross existing Cross Gears in battle zone onto creatures ──────────
     # Rule 504.2: pay cost again to cross a gear onto a creature.
     for gear in p_state.battle_zone:
@@ -419,6 +444,16 @@ def _actions_for_hand_card(
         )
         for combo in combos:
             actions.append(cast_spell(player, card_uid, defn.id, combo))
+
+    # ── Zerom ritual spells (rule 812) ──────────────────────────────────────
+    elif card_subtype == CardSubtype.ZEROM:
+        effective_cost = _compute_effective_cost(defn, state, player)
+        combos = _get_mana_combinations(
+            p_state.mana_zone, effective_cost, defn.civilizations
+        )
+        for combo in combos:
+            actions.append(cast_spell(player, card_uid, defn.id, combo))
+
 
     # ── Cross Gear ─────────────────────────────────────────────────────────
     elif card_type == CardType.CROSS_GEAR:

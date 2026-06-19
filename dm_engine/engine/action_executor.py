@@ -60,14 +60,22 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
         s.record_action(action_type, action.player, action.card_id)
 
     elif action_type == ActionType.SUMMON_CREATURE:
-        _require_card_uid(action)
         tap_mana_for_payment(s, action.player, action.mana_used)
-        creature = move_hand_to_battle(
-            s,
-            action.player,
-            action.card_uid,
-            evolution_base_uid=action.evolution_base_uid,
-        )
+        if action.card_uid:
+            # Normal summon from hand
+            creature = move_hand_to_battle(
+                s,
+                action.player,
+                action.card_uid,
+                evolution_base_uid=action.evolution_base_uid,
+            )
+        else:
+            # GR summon from Ultra GR zone
+            from engine.zone_mover import move_ultra_gr_to_battle
+            gr_def = s.find_in_ultra_gr(action.player, action.card_id)
+            if gr_def is None:
+                raise ValueError(f"GR card {action.card_id} not found in Ultra GR zone for player {action.player}")
+            creature = move_ultra_gr_to_battle(s, action.player, gr_def)
         s.record_action(action_type, action.player, action.card_id, creature.uid)
 
     elif action_type == ActionType.CAST_SPELL:

@@ -372,6 +372,13 @@ class GameState:
         result = self.find_creature_anywhere(uid)
         return result[0] if result else None
 
+    def find_in_ultra_gr(self, player: int, card_id: int) -> Optional[CardDefinition]:
+        """Find a CardDefinition in a player's Ultra GR zone by card_id."""
+        return next(
+            (c for c in self.players[player].ultra_gr_zone if c.id == card_id),
+            None,
+        )
+
     # ─────────────────────────────────────────────────────────────────────────
     # State copy — mandatory for every state-changing operation
     # ─────────────────────────────────────────────────────────────────────────
