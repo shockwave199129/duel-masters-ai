@@ -1023,26 +1023,6 @@ def flip_forbidden(creature: Creature) -> Creature:
     return creature
 
 
-def move_zerom_to_battle(state: GameState, controller: int, creature_def: "CardDefinition") -> "Creature":
-    """
-    Place a Zerom card from hand/mana into the battle zone as a creature (rule 812).
-    Stub — full Zerom ritual logic is in development.
-    """
-    from core.cards import CardDefinition as _CD
-    p_state = state.players[controller]
-    creature = Creature(
-        definition=creature_def,
-        uid=_new_uid(),
-        controller=controller,
-        owner=controller,
-        entered_turn=state.turn_number,
-        has_summoning_sickness=True,
-    )
-    creature.temp_flags["_zerom_flipped"] = True
-    p_state.battle_zone.append(creature)
-    return creature
-
-
 def move_ultra_gr_to_battle(state: GameState, controller: int, creature_uid: str) -> "Creature":
     """
     Move an Ultra GR creature face-up into the battle zone (rule 408).
