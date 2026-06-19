@@ -448,7 +448,7 @@ def _actions_for_hand_card(
                 for combo in combos:
                     actions.append(summon_creature(
                         player, card_uid, defn.id, combo,
-                        extra=(("twinpact_face", face),),
+                        twinpact_face=face,
                     ))
             return actions
 
@@ -485,7 +485,6 @@ def _actions_for_hand_card(
         )
         for combo in combos:
             actions.append(cast_spell(player, card_uid, defn.id, combo))
-
 
     # ── Duel Mate creatures (rule 820) ──────────────────────────────────────
     elif card_subtype == CardSubtype.DUEL_MATE:
