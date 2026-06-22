@@ -50,21 +50,28 @@ def resolve_battle(state: GameState) -> GameState:
     if defender.has_keyword(Keyword.SLAYER):
         attacker.set_flag("lost_battle", True)
 
+    # Rule 108.1b: when referencing a creature's power, a negative value is
+    # treated as 0. So battle comparison uses effective_power, while the
+    # underlying compute_power stays accurate (so the SBA can still detect
+    # zero-or-negative-power creatures for destruction at 115.3b / SBA).
     if attacker_always_wins and defender_always_wins:
         pass  # both win = neither loses (rule 115.3c)
     elif attacker_always_wins:
         defender.set_flag("lost_battle", True)
     elif defender_always_wins:
         attacker.set_flag("lost_battle", True)
-    elif attacker_power == defender_power:
-        # ∞ vs ∞ is a tie — both lose (rule 115.3b)
-        attacker.set_flag("lost_battle", True)
-        defender.set_flag("lost_battle", True)
-    elif attacker_power > defender_power:
-        # INFINITY > any finite number handles ∞ vs normal automatically
-        defender.set_flag("lost_battle", True)
     else:
-        attacker.set_flag("lost_battle", True)
+        eff_attacker = attacker.effective_power(s)
+        eff_defender = defender.effective_power(s)
+        if eff_attacker == eff_defender:
+            # ∞ vs ∞ is a tie — both lose (rule 115.3b)
+            attacker.set_flag("lost_battle", True)
+            defender.set_flag("lost_battle", True)
+        elif eff_attacker > eff_defender:
+            # INFINITY > any finite number handles ∞ vs normal automatically
+            defender.set_flag("lost_battle", True)
+        else:
+            attacker.set_flag("lost_battle", True)
 
     s.turn_info.phase = Phase.END_OF_ATTACK
     return check_state_based_actions(s)

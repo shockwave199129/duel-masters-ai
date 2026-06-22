@@ -149,6 +149,7 @@ class Keyword(Enum):
     S_BACK                  = "s_back"              # rule 112.3b — discard specified card
     NINJA_STRIKE            = "ninja_strike"        # rule 112.3c — summon during attack window
     SABAKI_Z                = "sabaki_z"            # rule 112.3d — discard Emblem of Judgment
+    EMBLEM_OF_JUDGMENT      = "emblem_of_judgment"  # rule 112.3d / 509.5d — Sabaki Z cost
     G_ZERO                  = "g_zero"              # rule 112.3e — free if condition met
     GRAVITY_ZERO            = "gravity_zero"        # alias for G_ZERO (older name)
     ATTACK_CHANCE           = "attack_chance"       # rule 112.3f — cast spell for free on attack
@@ -178,6 +179,9 @@ class Keyword(Enum):
     VEIL                    = "veil"
     FORTRESS_KEYWORD        = "fortress"
     EX_LIFE                 = "ex_life"             # shield a card when entering
+
+    # ── Over Drive (rule 112.2d) ─────────────────────────────────────────────────
+    OVER_DRIVE              = "over_drive"           # tap additional mana for bonus ability
 
     def __str__(self) -> str:
         return self.value
@@ -218,6 +222,8 @@ class ActionType(Enum):
     USE_G_ZERO          = "use_g_zero"          # rule 112.3e — free summon condition met
     USE_ATTACK_CHANCE   = "use_attack_chance"   # rule 112.3f — free spell on attack
     USE_G_STRIKE        = "use_g_strike"        # rule 101.4b — same timing as S-Trigger
+    USE_OVER_DRIVE      = "use_over_drive"      # rule 112.2d — tap additional mana for bonus ability
+    USE_SABAKI_Z        = "use_sabaki_z"        # rule 112.3d — discard Emblem of Judgment to execute
     HYPERIZE            = "hyperize"            # rule 816 — release Hyper Mode
 
     # ── Effect resolution choices ─────────────────────────────────────────────
@@ -341,6 +347,25 @@ class EffectAction(Enum):
     WIN_CONDITION       = "win_condition"       # Win the game by card effect
     LOSE_CONDITION      = "lose_condition"      # Lose the game by card effect
     ZEROM_FLIP          = "zerom_flip"          # flip to creature side
+    # ── Zone operations (Tier 3 / TODO 10) ───────────────────────────────────────
+    EVOLVE              = "evolve"              # rule 701.15 / 801 — Evolution Creature on base
+    CROSS_GEAR          = "cross_gear"          # rule 701.17 / 303 — attach Cross Gear
+    GOD_LINK            = "god_link"            # rule 701.18 / 804 — link God cards
+    FORTIFY             = "fortify"             # rule 701.19 / 304 — fortify shield with Castle
+    DEPLOY_FIELD        = "deploy_field"        # rule 701.27 / 308 — deploy Field card
+    SWAP_ZONES          = "swap_zones"          # rule 701.26 — swap card zones (REVOLUTION_CHANGE)
+    TURN_UPSIDE_DOWN    = "turn_upside_down"    # rule 701.28 — flip Field upside down
+    FORBIDDEN_EXPLOSION = "forbidden_explosion" # rule 701.29 — flip Final Forbidden Field
+    # ── Defensive / Offensive (Tier 3 / TODO 11) ─────────────────────────────────
+    PROTECTION          = "protection"          # cannot be targeted/destroyed by [civ/race] effects
+    GAIN_CONTROL        = "gain_control"        # take control of opponent's creature
+    # ── Field state (Tier 3 / TODO 12) ───────────────────────────────────────────
+    ZEROM_BIRTH         = "zerom_birth"         # rule 701.31 — flip Ritual/Nebula of Zerom to creature
+    SHIELDIFY           = "shieldify"           # rule 701.32 — turn a card into a shield
+    # ── Mandatory actions (Tier 3 / TODO 13) ─────────────────────────────────────
+    MUST_ATTACK         = "must_attack"         # creature must attack if able
+    MUST_BLOCK          = "must_block"          # creature must block if able
+    CANNOT_BLOCK        = "cannot_block"        # creature cannot block
     NONE                = "none"
 
 

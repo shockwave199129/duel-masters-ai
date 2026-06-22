@@ -25,7 +25,7 @@ import psycopg2.extras
 
 from core.enums import (
     Civilization, CardType, CardSubtype, Keyword,
-    EffectType, TriggerEvent, EffectAction,
+    EffectType, TriggerEvent, EffectAction, Zone,
 )
 from core.cards import CardDefinition, CardEffect, DeckDefinition
 
@@ -141,6 +141,36 @@ def _parse_int_prefix(value) -> Optional[int]:
     return int(match.group(0))
 
 
+# ── Zone validation ────────────────────────────────────────────────────────────
+
+VALID_ZONE_VALUES = {z.value for z in Zone}
+# "any" is a special sentinel used by the parser for CDAs (rule 110.4a) —
+# it means "this ability functions in all zones". The engine does not have
+# a Zone.ANY enum; we accept it here and map to the full zone set at runtime.
+VALID_ZONE_VALUES.add("any")
+
+
+def _validate_zones(zone_list: list[str]) -> tuple[str, ...]:
+    """Validate and normalize a list of zone strings against Zone enum.
+
+    Unknown zones are logged and replaced with 'battle_zone' (the default).
+    The special value 'any' is preserved for characteristic-defining abilities.
+    """
+    if not zone_list:
+        return ("battle_zone",)
+    validated = []
+    for z in zone_list:
+        if z in VALID_ZONE_VALUES:
+            validated.append(z)
+        else:
+            logger.warning(
+                "Unknown zone '%s' in active_in_zone; falling back to 'battle_zone'",
+                z,
+            )
+            validated.append("battle_zone")
+    return tuple(validated)
+
+
 # ── CardDatabase ───────────────────────────────────────────────────────────────
 
 class CardDatabase:
@@ -208,20 +238,39 @@ class CardDatabase:
             cur.execute(query, params)
             for row in cur.fetchall():
                 cid = row["card_id"]
+                raw_effect_type = row["effect_type"] or "triggered"
+                raw_is_replacement = bool(row["is_replacement"])
+                parsed_effect_type = _effect_type(raw_effect_type)
+
+                # Cross-validate is_replacement boolean vs effect_type enum
+                # The engine uses effect_type == EffectType.REPLACEMENT for dispatch.
+                # The is_replacement column is an LLM training signal; they should agree.
+                is_replacement_by_type = parsed_effect_type == EffectType.REPLACEMENT
+                if raw_is_replacement != is_replacement_by_type:
+                    logger.warning(
+                        "Card %d ability %d: is_replacement=%s disagrees with effect_type=%s (%s); "
+                        "engine uses effect_type for dispatch",
+                        cid,
+                        row["ability_index"] or 0,
+                        raw_is_replacement,
+                        raw_effect_type,
+                        parsed_effect_type.value,
+                    )
+
                 effect = CardEffect(
                     card_id=cid,
                     ability_index=row["ability_index"] or 0,
                     raw_text=row["raw_text"] or "",
-                    effect_type=_effect_type(row["effect_type"] or "triggered"),
+                    effect_type=parsed_effect_type,
                     trigger_event=_trigger_event(row["trigger_event"] or "none"),
                     effect_action=_effect_action(row["effect_action"] or "none"),
                     trigger_condition=_parse_json(row["trigger_condition"]),
                     effect_target=_parse_json(row["effect_target"]),
                     effect_value=_parse_json(row["effect_value"]),
                     is_optional=bool(row["is_optional"]),
-                    is_replacement=bool(row["is_replacement"]),
+                    is_replacement=raw_is_replacement,
                     active_in_phase=tuple(row["active_in_phase"] or ["any"]),
-                    active_in_zone=tuple(row["active_in_zone"] or ["battle_zone"]),
+                    active_in_zone=_validate_zones(list(row["active_in_zone"] or ["battle_zone"])),
                     parse_confidence=float(row["parse_confidence"] or 0.5),
                 )
                 effects.setdefault(cid, []).append(effect)

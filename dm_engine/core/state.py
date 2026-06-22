@@ -80,6 +80,29 @@ class AwaitedChoice:
         )
 
 
+# ── Shield Break Window ───────────────────────────────────────────────────────
+
+@dataclass
+class ShieldBreakWindow:
+    """
+    Rule 112.3a / 509.5: batch shield break declarations and resolution.
+
+    Phases:
+      declare — choose S-Trigger / G-Strike / S-Back before shields move to hand
+      resolve — execute declared effects in any order after hand add (509.5e)
+    """
+    defending_player:      int
+    standby_shields:       list[ShieldCard] = field(default_factory=list)
+    phase:                 str = "declare"
+    declared_s_triggers:   set[str] = field(default_factory=set)
+    declared_g_strikes:    set[str] = field(default_factory=set)
+    declared_s_backs:      list[tuple[str, str]] = field(default_factory=list)
+    emblems_added:         list[str] = field(default_factory=list)
+    pending_resolutions:   list[tuple[str, str, str]] = field(default_factory=list)
+    resolved_keys:         set[str] = field(default_factory=set)
+    # pending_resolutions entries: (kind, primary_uid, secondary_uid)
+
+
 # ── Effect Stack ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -94,6 +117,7 @@ class EffectStack:
     pending_triggers:      list[PendingTrigger] = field(default_factory=list)
     awaited_choice:        Optional[AwaitedChoice] = None
     shield_trigger_queue:  list[tuple[int, ShieldCard]] = field(default_factory=list)
+    shield_break_window:   Optional[ShieldBreakWindow] = None
     # (player_index, shield_card) — shields broken but trigger not yet resolved
 
     def has_pending(self) -> bool:
@@ -262,6 +286,12 @@ class GameState:
 
     # ── Effect resolution ─────────────────────────────────────────────────────
     effect_stack:   EffectStack = field(default_factory=EffectStack)
+
+    # ── Effect interruption guard (Rule 101.4d) ───────────────────────────────
+    # While resolving an effect, other triggers cannot interrupt.
+    # New triggers go to a "standby" state (stay in queue but not executed).
+    # This flag tracks whether we're currently in an effect resolution.
+    currently_resolving_effect: bool = False
 
     # ── Attack tracking ───────────────────────────────────────────────────────
     # None when no attack in progress

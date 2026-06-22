@@ -30,6 +30,12 @@ class CardEffect:
 
     effect_type:       EffectType
     trigger_event:     TriggerEvent
+    # NOTE: trigger_event is loaded from DB but the engine does NOT dispatch
+    # triggers based on this field. The PhaseController and trigger_resolver
+    # fire triggers based on game events (zone changes, battles, shield breaks,
+    # etc.). Only ON_DESTROY and ON_LEAVE_BATTLE_ZONE are currently mapped to
+    # internal EventType in zones.py for replacement effect resolution. The
+    # remaining 17 values serve as metadata / LLM training signals only.
     effect_action:     EffectAction
 
     # JSON blobs from DB — stored as dicts
@@ -39,9 +45,20 @@ class CardEffect:
 
     is_optional:       bool          # player may choose not to use
     is_replacement:    bool          # "instead of X, Y happens"
+    # NOTE: is_replacement is loaded from DB but NOT consumed by the engine.
+    # The engine uses effect_type == EffectType.REPLACEMENT instead (see
+    # CardEffect.is_replacement_effect()). This field is retained for
+    # potential future use or LLM training signals.
 
     active_in_phase:   tuple[str, ...]    # which phases this can fire
+    # NOTE: active_in_phase is loaded from DB but NOT currently consumed by
+    # the engine. The PhaseController advances phases/turns but does not
+    # gate effects based on this field. Retained for future phase-gated
+    # effect logic (e.g., effects only active in MAIN phase).
+
     active_in_zone:    tuple[str, ...]    # which zones the source must be in
+    # Used by action_generator.py for target zone selection (select_target,
+    # select_card, select_targets). Validated against Zone enum at load time.
 
     parse_confidence:  float         # 0.0–1.0, low = may need RAG fallback
 
@@ -58,6 +75,10 @@ class CardEffect:
         return self.effect_type == EffectType.ACTIVATED
 
     def is_replacement_effect(self) -> bool:
+        # NOTE: This checks effect_type == EffectType.REPLACEMENT, NOT the
+        # is_replacement boolean field. The is_replacement field is loaded
+        # from DB but not consumed by the engine; it exists for LLM training
+        # signals and potential future use.
         return self.effect_type == EffectType.REPLACEMENT
 
     def needs_rag_fallback(self) -> bool:
@@ -170,6 +191,17 @@ class CardDefinition:
 
     def has_shield_trigger(self) -> bool:
         return self.has_keyword(Keyword.SHIELD_TRIGGER)
+
+    def has_emblem_of_judgment(self) -> bool:
+        """Rule 112.3d / 509.5d: Emblem of Judgment (Judgment Crest) marker."""
+        if self.has_keyword(Keyword.EMBLEM_OF_JUDGMENT):
+            return True
+        for effect in self.effects:
+            raw = (effect.raw_text or "").lower()
+            if "emblem of judgment" in raw or "judgment crest" in raw:
+                return True
+        name = self.name.lower()
+        return "emblem of judgment" in name or "judgment crest" in name
 
     def has_speed_attacker(self) -> bool:
         return self.has_keyword(Keyword.SPEED_ATTACKER)

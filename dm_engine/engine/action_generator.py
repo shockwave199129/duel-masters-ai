@@ -46,7 +46,7 @@ from typing import Optional
 
 from core.enums import (
     Phase, ActionType, Civilization, Keyword,
-    CardType, CardSubtype, ManaUsage,
+    CardType, CardSubtype, ManaUsage, EffectAction,
 )
 from core.state import GameState
 from core.zones import Creature, ManaCard
@@ -62,7 +62,7 @@ from core.actions import (
     attack_player, attack_creature, pass_attack,
     declare_blocker, declare_guardman, pass_block,
     use_shield_trigger, use_s_back, use_ninja_strike,
-    use_g_zero, use_g_strike,
+    use_g_zero, use_g_strike, use_attack_chance, use_over_drive, use_sabaki_z,
     hyperize,
     select_yes_no, select_target, select_targets,
     select_card, select_mana, select_evolution_base,
@@ -71,6 +71,44 @@ from core.actions import (
 
 # We lazily import CardDatabase to avoid circular imports
 # (db module depends on core, which is fine; engine depends on both)
+
+
+def _effect_active_in_phase(effect, phase: Phase) -> bool:
+    """
+    Check if a CardEffect is active in the given Phase.
+
+    The effect's `active_in_phase` field is a tuple of phase name strings
+    (e.g., ("main", "attack") or ("any",)). The Phase enum names are
+    uppercase (e.g., Phase.MAIN, Phase.ATTACK_DECLARE).
+
+    - "any" means the effect is active in all phases (default for most effects)
+    - Phase names are matched case-insensitively against the Phase enum name
+    - For attack sub-phases, the sub-phase name is checked (e.g., "attack_declare")
+    """
+    active_phases = effect.active_in_phase
+    if not active_phases:
+        return False
+
+    # "any" means active in all phases
+    if "any" in active_phases:
+        return True
+
+    # Match against current phase name (lowercase)
+    phase_name = phase.name.lower()
+    if phase_name in active_phases:
+        return True
+
+    # Also check parent phase for attack sub-phases
+    # e.g., if effect is active in "attack", it's also active in "attack_declare"
+    if phase.is_attack_subphase() and "attack" in active_phases:
+        return True
+
+    return False
+
+
+def _filter_effects_by_phase(effects: list, phase: Phase) -> list:
+    """Filter a list of CardEffects to only those active in the current phase."""
+    return [e for e in effects if _effect_active_in_phase(e, phase)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,8 +140,9 @@ def get_legal_actions(state: GameState, db=None) -> list[Action]:
     if state.effect_stack.is_waiting_for_choice():
         return _generate_choice_actions(state)
 
-    # ── Priority 1: Shield trigger queue ──────────────────────────────────
-    # Rule 113.6: when a shield enters standby, declarations happen first.
+    # ── Priority 1: Shield break window / trigger queue ───────────────────
+    if state.effect_stack.shield_break_window is not None:
+        return _generate_shield_break_window_actions(state)
     if state.effect_stack.shield_trigger_queue:
         return _generate_shield_trigger_actions(state)
 
@@ -317,6 +356,22 @@ def _generate_main_actions(state: GameState, db=None) -> list[Action]:
                 and not creature.is_ignored):
             actions.append(hyperize(player, creature.uid, creature.id))
 
+    # ── Over Drive (rule 112.2d) ────────────────────────────────────────────
+    current_turn = state.turn_number
+    for creature in p_state.battle_zone:
+        if creature.entered_turn != current_turn:
+            continue
+        od_req = _get_over_drive_requirements(creature.definition)
+        if not od_req or creature.temp_flags.get("over_drive_used"):
+            continue
+        for mana_used in _over_drive_mana_combos(p_state.mana_zone, od_req):
+            actions.append(use_over_drive(
+                player,
+                creature.uid,
+                creature.id,
+                mana_used,
+            ))
+
     # ── King Cell combine (rule 814.1c) ─────────────────────────────────────
     if db is not None:
         actions.extend(_king_combine_actions(player, state, db))
@@ -453,9 +508,14 @@ def _actions_for_hand_card(
             return actions
 
         # ── Duel Mate (rule 820) ────────────────────────────────────────────
-        # Duel Mate creatures are handled by the dedicated subtype branch
-        # below (after Zerom); skip them here so they get their own path.
-        if not is_duel_mate(defn):
+        if is_duel_mate(defn):
+            effective_cost = _compute_effective_cost(defn, state, player)
+            combos = _get_mana_combinations(
+                p_state.mana_zone, effective_cost, defn.civilizations
+            )
+            for combo in combos:
+                actions.append(summon_creature(player, card_uid, defn.id, combo))
+        else:
             # ── Normal creature summon ─────────────────────────────────────
             effective_cost = _compute_effective_cost(defn, state, player)
             combos = _get_mana_combinations(
@@ -485,15 +545,6 @@ def _actions_for_hand_card(
         )
         for combo in combos:
             actions.append(cast_spell(player, card_uid, defn.id, combo))
-
-    # ── Duel Mate creatures (rule 820) ──────────────────────────────────────
-    elif card_subtype == CardSubtype.DUEL_MATE:
-        effective_cost = _compute_effective_cost(defn, state, player)
-        combos = _get_mana_combinations(
-            p_state.mana_zone, effective_cost, defn.civilizations
-        )
-        for combo in combos:
-            actions.append(summon_creature(player, card_uid, defn.id, combo))
 
     # ── Cross Gear ─────────────────────────────────────────────────────────
     elif card_type == CardType.CROSS_GEAR:
@@ -556,11 +607,13 @@ def _generate_activated_ability_actions(
       - Is the source card untapped (if tap is required)?
       - Can the mana cost be paid with current untapped mana?
       - Is a discard available (if discard is required)?
+      - Is the effect active in the current phase?
 
     Returns a list of activate_ability Action objects (may be empty).
     """
     actions: list[Action] = []
     p_state = state.players[player]
+    current_phase = state.current_phase
 
     # ── Collect all zones that can hold activatable cards ─────────────────
     zones: list = []
@@ -571,6 +624,11 @@ def _generate_activated_ability_actions(
     for card in zones:
         defn = card.definition
         activated = defn.get_activated_effects()
+        if not activated:
+            continue
+
+        # Filter by phase - only include effects active in current phase
+        activated = _filter_effects_by_phase(activated, current_phase)
         if not activated:
             continue
 
@@ -635,7 +693,9 @@ def _generate_activated_ability_actions(
         hc_def = hand_card.definition
         if hc_def.card_subtype == CardSubtype.FORBIDDEN:
             # Check if this Forbidden card has a release ability
-            for i, effect in enumerate(hc_def.get_activated_effects()):
+            # Filter by phase
+            activated = _filter_effects_by_phase(hc_def.get_activated_effects(), current_phase)
+            for i, effect in enumerate(activated):
                 if effect.effect_action == EffectAction.FORBIDDEN_RELEASE:
                     cost_info = effect.effect_value or {}
                     mana_cost = cost_info.get("mana_cost", 0)
@@ -662,7 +722,9 @@ def _generate_activated_ability_actions(
     for creature in p_state.battle_zone:
         cr_def = creature.definition
         if cr_def.card_subtype in (CardSubtype.NEO_EVOLUTION, CardSubtype.NEO):
-            for i, effect in enumerate(cr_def.get_activated_effects()):
+            # Filter by phase
+            activated = _filter_effects_by_phase(cr_def.get_activated_effects(), current_phase)
+            for i, effect in enumerate(activated):
                 if effect.effect_action == EffectAction.NEO_EVOLVE:
                     cost_info = effect.effect_value or {}
                     mana_cost = cost_info.get("mana_cost", 0)
@@ -783,6 +845,23 @@ def _generate_post_declare_actions(state: GameState) -> list[Action]:
                 opponent,
                 hand_card.uid, hand_card.id,
             ))
+
+    # ── Attack Chance (rule 112.3f) ─────────────────────────────────────────
+    # Turn player may cast Attack Chance spell for free when attacking creature
+    # meets the card-specific condition.
+    ctx = state.attack_context
+    if ctx is not None and ctx.attacker_player == player:
+        attacker = state.find_creature_anywhere(ctx.attacker_uid)
+        attacker_defn = attacker[1].definition if attacker else None
+        for hand_card in state.players[player].hand:
+            defn = hand_card.definition
+            if not defn.has_keyword(Keyword.ATTACK_CHANCE):
+                continue
+            if attacker_defn is not None and _attack_chance_condition_met(defn, attacker_defn):
+                actions.append(use_attack_chance(
+                    player,
+                    hand_card.uid, hand_card.id,
+                ))
 
     actions.append(pass_action(player, "post_declare"))
     return actions
@@ -911,7 +990,85 @@ def _generate_direct_attack_actions(state: GameState) -> list[Action]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Shield trigger declarations  (rule 113.6, 509.5a-c)
+# Shield break window  (rule 113.6, 509.5a-e)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _generate_shield_break_window_actions(state: GameState) -> list[Action]:
+    """Batch shield break declarations and resolution."""
+    win = state.effect_stack.shield_break_window
+    if win is None:
+        return []
+
+    player = win.defending_player
+    actions: list[Action] = []
+
+    if win.phase == "declare":
+        for shield in win.standby_shields:
+            defn = shield.definition
+            uid = shield.uid
+            if defn.has_shield_trigger() and uid not in win.declared_s_triggers:
+                actions.append(use_shield_trigger(player, uid, defn.id, use=True))
+            if defn.has_keyword(Keyword.G_STRIKE) and uid not in win.declared_g_strikes:
+                actions.append(use_g_strike(player, uid, defn.id, use=True))
+            for hand_card in state.players[player].hand:
+                if hand_card.definition.has_keyword(Keyword.S_BACK):
+                    pair = (hand_card.uid, uid)
+                    if pair not in win.declared_s_backs:
+                        actions.append(use_s_back(
+                            player,
+                            hand_card.uid, hand_card.id,
+                            uid, defn.id,
+                        ))
+        actions.append(pass_action(player, "finish_shield_declarations"))
+        return actions
+
+    if win.phase == "resolve":
+        for kind, primary, secondary in win.pending_resolutions:
+            key = f"{kind}:{primary}:{secondary}"
+            if key in win.resolved_keys:
+                continue
+            if kind == "s_trigger":
+                hand_card = state.players[player].find_in_hand(primary)
+                if hand_card is None:
+                    continue
+                actions.append(use_shield_trigger(
+                    player, primary, hand_card.definition.id, use=True,
+                ))
+            elif kind == "g_strike":
+                hand_card = state.players[player].find_in_hand(primary)
+                card_id = hand_card.definition.id if hand_card else 0
+                actions.append(use_g_strike(player, primary, card_id, use=True))
+            elif kind == "s_back":
+                hand_card = state.players[player].find_in_hand(primary)
+                if hand_card is None:
+                    continue
+                actions.append(use_s_back(
+                    player,
+                    primary, hand_card.definition.id,
+                    secondary, 0,
+                ))
+        for emblem_uid in win.emblems_added:
+            for hand_card in state.players[player].hand:
+                if not hand_card.definition.has_keyword(Keyword.SABAKI_Z):
+                    continue
+                key = f"sabaki_z:{hand_card.uid}:{emblem_uid}"
+                if key in win.resolved_keys:
+                    continue
+                actions.append(use_sabaki_z(
+                    player,
+                    hand_card.uid, hand_card.id,
+                    emblem_uid,
+                ))
+        if actions:
+            return actions
+        actions.append(pass_action(player, "finish_shield_resolution"))
+        return actions
+
+    return [pass_action(player, "finish_shield_resolution")]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shield trigger declarations  (legacy single-shield fallback)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _generate_shield_trigger_actions(state: GameState) -> list[Action]:
@@ -934,15 +1091,34 @@ def _generate_shield_trigger_actions(state: GameState) -> list[Action]:
 
     defn = shield_card.definition
 
-    # ── S-Trigger (rule 509.5a / 112.3a) ─────────────────────────────────
-    if defn.has_shield_trigger():
-        actions.append(use_shield_trigger(
-            shield_player, shield_card.uid, defn.id, use=True
-        ))
-        # Also offer "add to hand without triggering"
-        actions.append(use_shield_trigger(
-            shield_player, shield_card.uid, defn.id, use=False
-        ))
+    # ── S-Trigger batch (rule 509.5a / 112.3a) ────────────────────────────
+    # Rule 112.3a: If multiple cards with S-Trigger are added from shields
+    # to your hand simultaneously, you show and declare ALL cards you will
+    # use S-Trigger for. Once all declarations are finished, execute those
+    # cards one by one.
+    batch_shields = [
+        (p, s) for p, s in queue
+        if p == shield_player and s.definition.has_shield_trigger()
+    ]
+
+    if len(batch_shields) > 1:
+        # Multiple S-Trigger shields broken simultaneously — batch declaration
+        for p, s in batch_shields:
+            actions.append(use_shield_trigger(
+                p, s.uid, s.definition.id, use=True
+            ))
+            actions.append(use_shield_trigger(
+                p, s.uid, s.definition.id, use=False
+            ))
+    else:
+        # Single shield — standard S-Trigger offer
+        if defn.has_shield_trigger():
+            actions.append(use_shield_trigger(
+                shield_player, shield_card.uid, defn.id, use=True
+            ))
+            actions.append(use_shield_trigger(
+                shield_player, shield_card.uid, defn.id, use=False
+            ))
 
     # ── G-Strike (rule 509.5b / 101.4b) ──────────────────────────────────
     if defn.has_keyword(Keyword.G_STRIKE):
@@ -960,6 +1136,8 @@ def _generate_shield_trigger_actions(state: GameState) -> list[Action]:
                 hand_card.uid, hand_card.id,
                 shield_card.uid, shield_card.id,
             ))
+
+    # ── Sabaki Z handled after hand add in shield break window (509.5d) ───
 
     # If none of the above or player declines all, just add to hand
     if not actions:
@@ -1367,6 +1545,59 @@ def _g_zero_condition_met(
 _NINJA_STRIKE_RE = re.compile(r"ninja\s*strike\s+(\d+)", re.IGNORECASE)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Over Drive cost check  (rule 112.2d)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_OVER_DRIVE_RE = re.compile(
+    r"over\s*drive\s*[-—]\s*((?:[\w\s]+\s*x\d+\s*)+)",
+    re.IGNORECASE
+)
+
+
+def _get_over_drive_requirements(defn: CardDefinition) -> Optional[dict]:
+    """
+    Rule 112.2d: Over Drive — when you summon this creature, you may tap
+    another N cards of specified civilization(s) in your mana zone.
+
+    Returns a dict like: {Civilization.FIRE: 2, Civilization.LIGHT: 1}
+    or None if the card doesn't have Over Drive.
+    """
+    # Pattern to match each "CIV xN" part
+    civ_count_re = re.compile(r"(\w+)\s*x(\d+)", re.IGNORECASE)
+
+    for effect in defn.effects:
+        raw = effect.raw_text or ""
+        # First find the Over Drive section
+        od_match = _OVER_DRIVE_RE.search(raw)
+        if not od_match:
+            continue
+
+        od_text = od_match.group(1)
+        result = {}
+
+        # Map civilization name to Civilization enum
+        civ_map = {
+            "water": Civilization.WATER,
+            "fire": Civilization.FIRE,
+            "nature": Civilization.NATURE,
+            "light": Civilization.LIGHT,
+            "darkness": Civilization.DARKNESS,
+        }
+
+        # Find all "CIV xN" patterns
+        for match in civ_count_re.finditer(od_text):
+            civ_name = match.group(1).strip().lower()
+            count = int(match.group(2))
+            civ = civ_map.get(civ_name)
+            if civ:
+                result[civ] = count
+
+        if result:
+            return result
+    return None
+
+
 def _get_ninja_strike_cost(defn: CardDefinition) -> Optional[int]:
     """
     Rule 112.3c: Ninja Strike can be used if the number of cards in the mana
@@ -1390,6 +1621,80 @@ def _get_ninja_strike_cost(defn: CardDefinition) -> Optional[int]:
                 return int(match.group(1))
     # Fallback: text was not parseable — use the printed cost as a proxy.
     return defn.cost
+
+
+def _over_drive_mana_combos(
+    mana_zone: list[ManaCard],
+    requirements: dict,
+) -> list[list[ManaUsage]]:
+    """All valid mana tap combinations for an Over Drive additional cost."""
+    civ_items = list(requirements.items())
+    per_civ_choices: list[list[ManaUsage]] = []
+
+    for civ, count in civ_items:
+        available = [m for m in mana_zone if civ in m.definition.civilizations]
+        if len(available) < count:
+            return []
+        civ_combos: list[list[ManaUsage]] = []
+        for mana_cards in itertools.combinations(available, count):
+            civ_combos.append([
+                ManaUsage(mana_uid=m.uid, used_for_civ=civ)
+                for m in mana_cards
+            ])
+        per_civ_choices.append(civ_combos)
+
+    if not per_civ_choices:
+        return []
+
+    results: list[list[ManaUsage]] = []
+    for combo_tuple in itertools.product(*per_civ_choices):
+        merged: list[ManaUsage] = []
+        used_uids: set[str] = set()
+        valid = True
+        for part in combo_tuple:
+            for usage in part:
+                if usage.mana_uid in used_uids:
+                    valid = False
+                    break
+                used_uids.add(usage.mana_uid)
+                merged.append(usage)
+            if not valid:
+                break
+        if valid:
+            results.append(merged)
+    return results
+
+
+_ATTACK_CHANCE_CIV_RE = re.compile(
+    r"attack\s*chance[^a-z0-9]*(fire|water|nature|light|darkness)",
+    re.IGNORECASE,
+)
+
+
+def _attack_chance_condition_met(
+    spell_defn: CardDefinition,
+    attacker_defn: CardDefinition,
+) -> bool:
+    """
+    Rule 112.3f: Attack Chance fires under card-specific conditions.
+    Falls back to any attack if no condition is parseable.
+    """
+    for effect in spell_defn.effects:
+        raw = effect.raw_text or ""
+        match = _ATTACK_CHANCE_CIV_RE.search(raw)
+        if match:
+            civ_name = match.group(1).lower()
+            civ_map = {
+                "water": Civilization.WATER,
+                "fire": Civilization.FIRE,
+                "nature": Civilization.NATURE,
+                "light": Civilization.LIGHT,
+                "darkness": Civilization.DARKNESS,
+            }
+            required = civ_map.get(civ_name)
+            if required is not None:
+                return required in attacker_defn.civilizations
+    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────

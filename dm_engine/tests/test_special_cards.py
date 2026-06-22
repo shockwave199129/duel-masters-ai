@@ -818,18 +818,17 @@ check("12f: non-twinpact face=1 returns own cost (no twinpact_other_face)",
 
 # 12g) Action execution applies correct face characteristics
 from engine.action_executor import execute_action
+from engine.action_generator import get_legal_actions
 # Pick a face=1 action
 if face1_actions:
-    act = face1_actions[0]
-    # Rebuild state and action together so card_uid matches
     exec_state = make_mana_state()
-    exec_hand_uid = exec_state.players[0].hand[0].uid
-    # Rebuild the action with the correct card_uid from this state
-    act_with_uid = summon_creature(
-        act.player, exec_hand_uid, act.card_id, act.mana_used,
-        twinpact_face=act.twinpact_face,
-    )
-    exec_state_copy = execute_action(exec_state, act_with_uid)
+    exec_actions = get_legal_actions(exec_state)
+    exec_face1 = [
+        a for a in exec_actions
+        if a.card_id == 1200 and a.twinpact_face == 1
+    ]
+    if exec_face1:
+        exec_state_copy = execute_action(exec_state, exec_face1[0], validate=False)
     p0_creatures = exec_state_copy.players[0].battle_zone
     if p0_creatures:
         creature = p0_creatures[0]

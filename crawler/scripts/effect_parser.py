@@ -152,15 +152,20 @@ Each effect object must have these exact fields:
   "ability_index": <int, 0-based position in the list>,
   "raw_text": "<exact input line>",
   "effect_type": "<one of: keyword|triggered|activated|static|replacement|cost_mod|spell>",
-  "trigger_event": "<one of: on_enter_battle_zone|on_attack|on_break_shield|on_destroy|on_leave_battle_zone|start_of_turn|end_of_turn|on_summon|on_battle|on_block|on_draw|on_mana_charge|on_shield_trigger|on_dragsolve|on_awaken|none>",
+  "trigger_event": "<one of: on_enter_battle_zone|on_attack|on_break_shield|on_destroy|on_leave_battle_zone|start_of_turn|end_of_turn|on_summon|on_cast|on_battle|on_block|on_draw|on_mana_charge|on_shield_trigger|on_win_battle|on_direct_attack|before_break|none>",
   "trigger_condition": "<JSON object as a string, or null>",
-  "effect_action": "<one of: draw|destroy|return_to_hand|search_deck|put_to_mana|summon_free|put_to_battle_zone|put_to_shield|add_to_hand|discard|tap|untap|power_modify|cannot_attack|cannot_be_blocked|cannot_be_destroyed|win_battle|break_shield|look_at_top|shuffle|cost_reduce|cost_increase|give_keyword|banish_to_abyss|move_zone|reveal|GR_summon|copy_effect|awaken|awaken_link|dragsolve|link_release|dragon_soul_evasion|psychic_release|dragon_evasion|combine|extra_ex_life|none>",
+  "effect_action": "<one of: draw|destroy|return_to_hand|search_deck|put_to_mana|summon_free|put_to_battle_zone|put_to_shield|add_to_hand|discard|tap|untap|power_modify|power_fix|cannot_attack|cannot_be_blocked|cannot_be_destroyed|win_battle|break_shield|look_at_top|shuffle|cost_reduce|cost_increase|give_keyword|banish_to_abyss|move_zone|reveal|GR_summon|copy_effect|attach_seal|remove_seal|gachinko_judge|hyperize|awaken|awaken_link|dragsolve|link_release|dragon_soul_evasion|psychic_release|dragon_evasion|twinpact_flip|forbidden_flip|combine|extra_ex_life|zerom_ritual|zerom_flip|forbidden_release|neo_evolve|win_condition|lose_condition|evolve|cross_gear|god_link|fortify|deploy_field|swap_zones|turn_upside_down|forbidden_explosion|protection|gain_control|zerom_birth|shieldify|must_attack|must_block|cannot_block|none>",
   "effect_target": "<JSON object as a string, or null>",
   "effect_value": "<JSON value as a string, or null>",
   "is_optional": <boolean>,
   "is_replacement": <boolean>,
   "active_in_phase": <array of strings, or ["any"]>,
   "active_in_zone": <array of strings, or ["battle_zone"]>,
+  Valid zone values: battle_zone, shield_zone, mana_zone, graveyard, hand, deck, hyperspatial, ultra_gr, abyss_zone, pending.
+  Use ["any"] for characteristic-defining abilities (rule 110.4a).
+  Use ["shield_zone"] for Shield Go, Castle, Shield Force (rule 110.3d).
+  Use ["mana_zone"] for Ninja Strike, mana zone execution (rule 110.4d).
+  Default to ["battle_zone"] when uncertain.
   "parse_confidence": <float 0.0-1.0>
 }
 
@@ -181,11 +186,115 @@ Psychic / Dragheart flip mechanics (use these effect_action values):
 - "dragon_evasion":    Replacement effect: Dragheart Creature would leave BZ → flips to
                        Weapon/Fortress face instead (rule 807.1b). Set is_replacement=true.
 
-Trigger event guidelines for Psychic/Dragheart:
+Additional effect_action guidelines:
+- "power_fix":          Set power to a specific computed value (rule 206.3). Use when a card says
+                       "power equal to..." or "gets power equal to...". Use effect_value to
+                       store the formula parameters. For +/- power changes, use "power_modify".
+- "attach_seal":        Attach a seal face-down on a creature (rule 701.24). The seal is the
+                       top card of the owner's deck.
+- "remove_seal":        Remove a seal from a creature (rule 701.23). Occurs when a Command
+                       with matching civilization enters the Battle Zone.
+- "gachinko_judge":     Gachinko Judge comparison mechanic (rule 701.21). Compare power to
+                       determine an outcome.
+- "hyperize":           Hyper Soul X mechanic (rule 816). Special transformation.
+- "twinpact_flip":      Twinpact creature flips to its other face when summoned (rule 810).
+                       Use trigger_event "on_summon".
+- "forbidden_flip":     Forbidden Heartbeat flips to Forbidden Creature face when leaving
+                       the Battle Zone (rule 809). Use trigger_event "on_leave_battle_zone".
+- "zerom_ritual":      Cast a Ritual/Nebula of Zerom, flipping it to the creature side
+                       (rule 812). Use effect_type "spell" or "triggered".
+- "zerom_flip":        Flip a Zerom Ritual/Nebula card to its creature face (rule 812).
+- "forbidden_release":  Flip a Forbidden card from hand to the Battle Zone (rule 809).
+                       Use trigger_event "on_enter_battle_zone".
+- "neo_evolve":         NEO creature performs in-place evolution (rule 802). Similar to
+                       standard evolution but the NEO stays in place.
+- "win_condition":      Card effect states "you win the game" (rule 104.2c).
+- "lose_condition":     Card effect states "you lose the game" (rule 104.2c).
+
+Card-manipulation effects (use existing effect_action values with effect_value payloads):
+- "give_keyword":  Add a keyword, civilization, or characteristic to a target. Use effect_value
+                to specify what is given. For civilization changes:
+                effect_value: {"add_civ": "fire"} or {"remove_civ": "water"} (rule 106.4).
+                For keyword grants: effect_value: {"keyword": "double_breaker"}.
+- "power_modify":  Change power by a delta. effect_value: {"amount": N} for +N/-N power.
+                For "double power": effect_value: {"operation": "double"} (rule 206.4).
+                For "power becomes N": use "power_fix" with effect_value: {"value": N} (rule 206.3).
+- "power_fix":     Set power to a specific value (rule 206.3). Use when text says "power equal to..."
+                or "gets power equal to...". effect_value stores the formula parameters.
+- "cannot_attack": Target cannot attack. Use effect_target to specify scope — "creature" for a
+                specific creature, "player" for preventing a player from attacking.
+- "cannot_be_blocked": Target creature cannot be blocked (rule 509.5c).
+- "cannot_be_destroyed": Target cannot be destroyed by specified means.
+
+Deck / Graveyard manipulation (use existing effect_action values with effect_value payloads):
+- "reveal":       Reveal cards to a player. effect_value: {"zone": "hand", "target": "opponent"}
+                for looking at opponent's hand (rule 701.9); {"zone": "deck", "position": "top"}
+                for revealing top card of deck.
+- "look_at_top":   Look at top card of deck without revealing (rule 701.10). Private information.
+                Use ONLY when the card text says "look at" (not "reveal").
+- "move_zone":    Move cards between zones. effect_value: {"from": "deck_top", "to": "deck_bottom"}
+                for putting top card on bottom; {"from": "hand", "to": "graveyard"} for discard-like
+                effects that specify zone names.
+- "banish_to_abyss": Duel Masters term for "exile" — send a card to the Abyss Zone (rule 410 / 701.33).
+                This is the canonical action for effects that say "exile [target]" or "send to abyss".
+- "search_deck":   Search deck for a card. effect_value: {"action": "rearrange", "count": N} for
+                rearranging top N cards (rule 701.10).
+- "put_to_mana":   Charge a mana card — move it to the Mana Zone (rule 503).
+                effect_value: {"source": "hand"} when charging from hand.
+
+Shield / Breaker variants:
+- "break_shield":  Break shields. effect_value: {"count": 2} for T Breaker, {"count": 3} for
+                W Breaker (rule 509.2). Default count is 1 for standard breaker.
+- "give_keyword" with {"keyword": "double_breaker"} for Double Breaker keyword (rule 509.2).
+
+Zone operations (new effect_action values):
+- "evolve":          Place an Evolution Creature on top of a base creature (rules 701.15, 801).
+                       Use effect_target to specify the base creature.
+- "cross_gear":      Attach a Cross Gear card onto an existing creature (rules 701.17, 303).
+- "god_link":        Link multiple God cards into one creature (rules 701.18, 804).
+- "fortify":         Fortify a shield with a Castle card (rules 701.19, 304).
+- "deploy_field":    Deploy a Field card to the Field Zone (rules 701.27, 308).
+- "swap_zones":      Swap the locations of two cards between zones (rule 701.26).
+                       effect_value: {"card_a_uid": "...", "card_b_uid": "..."}.
+- "turn_upside_down": Turn a Field card upside down (permanent) (rule 701.28).
+- "forbidden_explosion": Flip a Final Forbidden Field card (rule 701.29).
+
+Defensive / Offensive (new effect_action values):
+- "protection":      "Cannot be targeted/destroyed by [civ/race] effects".
+                   effect_value: {"protect_from": "fire"} or {"protect_from_race": "Dragon"}.
+- "gain_control":    Take control of an opponent's creature.
+                   effect_value: {"duration": "until_end_of_turn"} or {"duration": "permanent"}.
+
+Field state (new effect_action values):
+- "zerom_birth":    Flip a Ritual/Nebula of Zerom card to its creature side (rule 701.31).
+- "shieldify":       Turn a card into a shield (rule 701.32).
+
+Mandatory actions (new effect_action values):
+- "must_attack":     Creature must attack if able.
+- "must_block":      Creature must block if able.
+- "cannot_block":    Creature cannot block.
+
+Use "GR_summon" when a card specifically GR Summons from the Ultra GR Zone (rule 701.30).
+Use "summon_free" for generic "summon without paying cost" effects.
+
+Trigger event guidelines:
+- "When this creature attacks" → trigger_event: "on_attack"
+- "When this creature blocks" → trigger_event: "on_block"
+- "When this creature battles" → trigger_event: "on_battle"
+- "When this creature is summoned" → trigger_event: "on_summon"
+- "When you cast a spell" → trigger_event: "on_cast"
+- "When a shield is broken" → trigger_event: "on_shield_trigger"
+- "When this creature wins a battle" → trigger_event: "on_win_battle"
+- "At the beginning of your turn" → trigger_event: "start_of_turn"
+- "At the end of your turn" → trigger_event: "end_of_turn"
+- "Before each shield break" → trigger_event: "before_break" (rule 509.3)
+- "When attacking with 0 opponent shields" → trigger_event: "on_direct_attack" (rule 509)
+- Replacement effects (Release / Evasion) → trigger_event: "none" (they apply passively)
+
+Psychic / Dragheart trigger events:
 - Awaken condition checks → trigger_event: "start_of_turn"
 - Dragsolution condition checks → trigger_event: "end_of_turn"
 - On-enter abilities ("When you put this dragheart…") → trigger_event: "on_enter_battle_zone"
-- Replacement effects (Release / Evasion) → trigger_event: "none" (they apply passively)
 
 King Cell combine (rule 814):
 - "combine":           King Cells in hand/mana combine into a King Creature. Use effect_type

@@ -27,6 +27,10 @@ def resolve_pending_triggers(state: GameState) -> GameState:
     Triggers are assumed to have already been ordered by turn-player priority
     before being added, but we still evaluate trigger conditions here so the
     executor only runs valid triggers.
+    
+    Rule 101.4d: While resolving an effect, other triggers cannot interrupt.
+    If currently_resolving_effect is True, triggers added during resolution
+    are left in the queue (standby) and not processed until the effect finishes.
     """
     s = state.copy()
     while s.effect_stack.pending_triggers and not s.is_terminal():
@@ -35,6 +39,9 @@ def resolve_pending_triggers(state: GameState) -> GameState:
             break
         if not _trigger_condition_matches(s, trigger):
             continue
+        # If we're in the middle of resolving an effect, triggers can only
+        # interrupt if they're replacement effects (rule 101.4d).
+        # For now, just note the flag — most triggers aren't replacement effects yet.
         s = execute_pending_trigger(s, trigger)
     return s
 

@@ -19,11 +19,12 @@ Objects defined here:
 
 from __future__ import annotations
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Optional
 from uuid import uuid4
 
 from .enums import Civilization, Keyword, CardSubtype, CDAFormulaType, EffectAction, INFINITY
-from .cards import CardDefinition
+from .cards import CardDefinition, CardEffect
 
 
 def _new_uid() -> str:
@@ -205,6 +206,9 @@ class ShieldCard:
 
 # ── Power Modifier ────────────────────────────────────────────────────────────
 
+from core.number_calc import CalculationOp, calculate_dm
+
+
 @dataclass
 class PowerModifier:
     """
@@ -218,6 +222,7 @@ class PowerModifier:
     is_per_card:   bool = False   # True for "Power Attacker +1000 per fire card"
     per_card_zone: Optional[str] = None   # zone to count (e.g. "mana_zone")
     per_card_civ:  Optional[Civilization] = None  # civilization filter
+    calc_op:       CalculationOp = CalculationOp.ADDITION  # rule 108.2 operation type
 
     def __repr__(self) -> str:
         sign = "+" if self.amount >= 0 else ""
@@ -417,8 +422,9 @@ class Creature:
                 total += game_state_ref.global_effects.get_global_power_bonus(self.controller, self.controller)
             return total
 
-        # ── Standard power computation ────────────────────────────────────────────
-        total = self.base_power
+        # ── Standard power computation (Rule 108.2) ───────────────────────────────
+        # Build modifier list with calculation operations
+        modifiers: list[tuple[int, CalculationOp]] = []
         for mod in self.power_modifiers:
             if mod.is_per_card and game_state_ref is not None:
                 count = game_state_ref.count_cards_in_zone(
@@ -426,15 +432,43 @@ class Creature:
                     zone=mod.per_card_zone,
                     civilization=mod.per_card_civ
                 )
-                total += mod.amount * count
+                modifiers.append((mod.amount * count, mod.calc_op))
             else:
-                total += mod.amount
+                # Negative amounts are treated as subtraction per Rule 108.2
+                if mod.amount < 0:
+                    modifiers.append((abs(mod.amount), CalculationOp.SUBTRACTION))
+                else:
+                    modifiers.append((mod.amount, mod.calc_op))
         # Add per-card global power bonuses (static aura effects)
         if game_state_ref is not None:
-            total += game_state_ref.global_effects.get_per_card_power_bonus(self)
+            bonus = game_state_ref.global_effects.get_per_card_power_bonus(self)
+            if bonus > 0:
+                modifiers.append((bonus, CalculationOp.ADDITION))
             # Add global power bonus (e.g. "all creatures get +2000 power")
-            total += game_state_ref.global_effects.get_global_power_bonus(self.controller, self.controller)
-        return total
+            g_bonus = game_state_ref.global_effects.get_global_power_bonus(self.controller, self.controller)
+            if g_bonus > 0:
+                modifiers.append((g_bonus, CalculationOp.ADDITION))
+        return calculate_dm(self.base_power, modifiers)
+
+    def effective_power(self, game_state_ref=None) -> int:
+        """
+        Rule 108.1b: When referencing a creature's power, a negative value
+        is treated as 0. The actual compute_power() can return negative
+        values (so the SBA can detect and destroy the creature), but any
+        caller that is *referencing* the power for comparison, battle, or
+        arithmetic purposes should use this method.
+
+        Examples:
+          - Battle: attacker 5000 vs defender -1000 → defender treated as 0,
+            so attacker wins (and defender is then destroyed by the SBA).
+          - Card effect "choose creatures whose total power equals 11000":
+            a -1000-power creature contributes 0, not -1000.
+        """
+        # -∞ is the explicit "destroyed" sentinel — preserve it
+        actual = self.compute_power(game_state_ref)
+        if actual == -INFINITY:
+            return -INFINITY
+        return max(0, actual)
 
     def _compute_cda_power(self, game_state_ref=None) -> int:
         """
@@ -685,10 +719,37 @@ class Creature:
           - Power modifiers to other creatures (via GlobalEffectRegistry)
           - Keyword grants to other creatures (via GlobalEffectRegistry)
           - Registration of per-card global effects
+
+        NOTE: Phase filtering is applied at entry time. For proper phase-gated
+        static effects (e.g., effects that only work during MAIN phase), the engine
+        would need to re-evaluate static effects on phase changes. This is a
+        partial implementation - effects with active_in_phase restrictions will
+        only be applied if the creature enters during an active phase.
         """
         from core.global_effects import GlobalEffect, GlobalEffectType
+        from core.enums import Phase
 
+        # Inline phase filtering to avoid circular import with engine.action_generator
+        def _effect_active_in_phase(effect, phase: Phase) -> bool:
+            active_phases = effect.active_in_phase
+            if not active_phases:
+                return False
+            if "any" in active_phases:
+                return True
+            phase_name = phase.name.lower()
+            if phase_name in active_phases:
+                return True
+            if phase.is_attack_subphase() and "attack" in active_phases:
+                return True
+            return False
+
+        def _filter_effects_by_phase(effects, phase):
+            return [e for e in effects if _effect_active_in_phase(e, phase)]
+
+        current_phase = game_state.current_phase
         effects = self.definition.get_static_effects()
+        effects = _filter_effects_by_phase(effects, current_phase)
+
         for card_effect in effects:
             self.static_effects.append(card_effect)
 

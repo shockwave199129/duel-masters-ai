@@ -553,7 +553,8 @@ def move_shield_to_standby(state: GameState, player: int, shield_index: int) -> 
         raise ValueError(f"Invalid shield index {shield_index}")
     shield = p_state.shield_zone.pop(shield_index)
     shield.reveal()
-    state.effect_stack.add_shield_trigger(player, shield)
+    from engine.shield_break_window import open_shield_break_window
+    open_shield_break_window(state, player, shield)
     return shield
 
 

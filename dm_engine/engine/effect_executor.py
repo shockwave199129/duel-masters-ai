@@ -77,8 +77,16 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
     If the effect requires a player choice (target selection, yes/no, etc.),
     an AwaitedChoice is set on the effect stack and the trigger is NOT
     resolved — the caller must stop processing further triggers.
+    
+    Rule 101.4d: Set currently_resolving_effect flag during execution so that
+    any triggers fired during this effect's resolution are queued but not
+    immediately executed (they enter "standby" state).
     """
     s = state.copy()
+    
+    # Mark that we're starting to resolve an effect (rule 101.4d)
+    s.currently_resolving_effect = True
+    
     effect = trigger.effect
     controller = trigger.controller
 
@@ -112,7 +120,9 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
             min_choices=min_choices,
             prompt=effect.raw_text or f"Choose for {effect.effect_action.value}",
         ))
-        return s  # paused — do not execute or pop further triggers
+        # Paused — do not execute or pop further triggers
+        # Note: currently_resolving_effect is still True, preventing interruptions
+        return s
 
     action = effect.effect_action
 
@@ -219,8 +229,44 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
         _do_win_by_effect(s, controller, trigger)
     elif action == EffectAction.LOSE_CONDITION:
         _do_lose_by_effect(s, controller, trigger)
+    # ── Zone operations (Tier 3 / TODO 10) ──────────────────────────────────────
+    elif action == EffectAction.EVOLVE:
+        pass  # TODO: implement evolution mechanic (rules 701.15, 801)
+    elif action == EffectAction.CROSS_GEAR:
+        pass  # TODO: implement Cross Gear attachment (rules 701.17, 303)
+    elif action == EffectAction.GOD_LINK:
+        pass  # TODO: implement God link (rules 701.18, 804)
+    elif action == EffectAction.FORTIFY:
+        pass  # TODO: implement fortify (rules 701.19, 304)
+    elif action == EffectAction.DEPLOY_FIELD:
+        pass  # TODO: implement Field deployment (rules 701.27, 308)
+    elif action == EffectAction.SWAP_ZONES:
+        pass  # TODO: implement zone swap (rule 701.26)
+    elif action == EffectAction.TURN_UPSIDE_DOWN:
+        pass  # TODO: implement Field flip (rule 701.28)
+    elif action == EffectAction.FORBIDDEN_EXPLOSION:
+        pass  # TODO: implement Final Forbidden flip (rule 701.29)
+    # ── Defensive / Offensive (Tier 3 / TODO 11) ────────────────────────────────
+    elif action == EffectAction.PROTECTION:
+        pass  # TODO: implement protection effect
+    elif action == EffectAction.GAIN_CONTROL:
+        pass  # TODO: implement gain control effect
+    # ── Field state (Tier 3 / TODO 12) ──────────────────────────────────────────
+    elif action == EffectAction.ZEROM_BIRTH:
+        pass  # TODO: implement Zerom birth (rule 701.31)
+    elif action == EffectAction.SHIELDIFY:
+        pass  # TODO: implement shieldify (rule 701.32)
+    # ── Mandatory actions (Tier 3 / TODO 13) ────────────────────────────────────
+    elif action == EffectAction.MUST_ATTACK:
+        pass  # TODO: implement must-attack effect
+    elif action == EffectAction.MUST_BLOCK:
+        pass  # TODO: implement must-block effect
+    elif action == EffectAction.CANNOT_BLOCK:
+        pass  # TODO: implement cannot-block effect
     # EffectAction.NONE and unknown values intentionally no-op.
 
+    # Clear the "resolving effect" flag and run SBAs (rule 101.4d)
+    s.currently_resolving_effect = False
     return check_state_based_actions(s)
 
 

@@ -131,6 +131,9 @@ class Action:
     # ── Evolution ─────────────────────────────────────────────────────────────
     evolution_base_uid: Optional[str]              = None
 
+    # ── Twinpact face selection (Rule 810.3) ────────────────────────────────
+    twinpact_face:      int = 0                     # 0 = default, 1 = other face
+
     # ── Discard (Ninja Strike, S-Back, Revolution Change) ─────────────────────
     discard_uid:        Optional[str]              = None
 
@@ -166,6 +169,7 @@ class Action:
             ActionType.USE_G_ZERO,
             ActionType.USE_ATTACK_CHANCE,
             ActionType.USE_G_STRIKE,
+            ActionType.USE_SABAKI_Z,
         )
 
     def is_play_from_hand(self) -> bool:
@@ -257,6 +261,7 @@ def summon_creature(
     card_id:            int,
     mana_used:          list[ManaUsage],
     evolution_base_uid: Optional[str] = None,
+    twinpact_face:      int = 0,
 ) -> Action:
     """
     Rule 301.1: Pay cost by tapping mana, move creature from hand to battle zone.
@@ -265,6 +270,8 @@ def summon_creature(
 
     evolution_base_uid: set for Evolution creatures — the creature being evolved onto.
     (rule 801: evolution sits on top of a valid base creature)
+
+    twinpact_face: Rule 810.3 — which face of a Twinpact card is being used.
     """
     return Action(
         player=player,
@@ -273,6 +280,7 @@ def summon_creature(
         card_id=card_id,
         mana_used=tuple(mana_used),
         evolution_base_uid=evolution_base_uid,
+        twinpact_face=twinpact_face,
     )
 
 
@@ -307,30 +315,40 @@ def activate_ability(
     mana_used:    list[ManaUsage],
     tap_source:   bool = False,
     discard_uid:  Optional[str] = None,
+    is_forbidden_release: bool = False,
+    is_neo_evolve: bool = False,
 ) -> Action:
     """
     Rule 110.3c: Activate an ability on a card in play by paying its cost.
     Costs may include: tapping mana cards, tapping the source card, and/or
     discarding a card from hand.
 
-    source_uid:     uid of the card whose ability is being activated
-    source_card_id: card_id of the source card
-    ability_index:  which ■ ability on the card (0-based)
-    mana_used:      tuple of ManaUsage for mana cost payment
-    tap_source:     True if the source card must tap (e.g. creature abilities)
-    discard_uid:    uid of card from hand to discard (if discard cost)
+    source_uid:            uid of the card whose ability is being activated
+    source_card_id:        card_id of the source card
+    ability_index:         which ■ ability on the card (0-based)
+    mana_used:             tuple of ManaUsage for mana cost payment
+    tap_source:            True if the source card must tap (e.g. creature abilities)
+    discard_uid:           uid of card from hand to discard (if discard cost)
+    is_forbidden_release:  True if this is a Forbidden Release activation (rule 809)
+    is_neo_evolve:         True if this is a NEO Evolution activation (rule 802)
     """
+    extra = [
+        ("ability_index", ability_index),
+        ("tap_source", tap_source),
+        ("discard_uid", discard_uid),
+    ]
+    if is_forbidden_release:
+        extra.append(("is_forbidden_release", True))
+    if is_neo_evolve:
+        extra.append(("is_neo_evolve", True))
+
     return Action(
         player=player,
         action_type=ActionType.ACTIVATE_ABILITY,
         card_uid=source_uid,
         card_id=source_card_id,
         mana_used=tuple(mana_used),
-        extra=(
-            ("ability_index", ability_index),
-            ("tap_source", tap_source),
-            ("discard_uid", discard_uid),
-        ),
+        extra=tuple(extra),
     )
 
 
@@ -723,6 +741,30 @@ def use_g_strike(
     )
 
 
+def use_over_drive(
+    player:       int,
+    creature_uid: str,
+    creature_id:  int,
+    mana_used:    list["ManaUsage"],
+) -> Action:
+    """
+    Rule 112.2d: Over Drive — when you summon this creature, you may tap
+    another N cards of specified civilization(s) in your mana zone. If you do,
+    this creature gets the bonus ability (additional triggered effect).
+
+    The bonus ability is already stored as a triggered effect on the creature.
+    This action just pays the additional cost (tapping the mana cards).
+    The triggered effect will fire automatically after the summon completes.
+    """
+    return Action(
+        player=player,
+        action_type=ActionType.USE_OVER_DRIVE,
+        card_uid=creature_uid,
+        card_id=creature_id,
+        mana_used=tuple(mana_used),
+    )
+
+
 def hyperize(
     player:       int,
     creature_uid: str,
@@ -737,6 +779,27 @@ def hyperize(
         action_type=ActionType.HYPERIZE,
         card_uid=creature_uid,
         card_id=creature_id,
+    )
+
+
+def use_sabaki_z(
+    player:      int,
+    card_uid:    str,      # the Sabaki Z card in hand
+    card_id:     int,
+    discard_uid: str,      # the Emblem of Judgment shield card to discard
+) -> Action:
+    """
+    Rule 112.3d: Sabaki Z — when a card with 'Emblem of Judgment' is added
+    from a shield to your hand, you can immediately execute it without paying
+    the cost by discarding that card.
+    """
+    return Action(
+        player=player,
+        action_type=ActionType.USE_SABAKI_Z,
+        card_uid=card_uid,
+        card_id=card_id,
+        discard_uid=discard_uid,
+        mana_used=(),
     )
 
 
@@ -927,6 +990,7 @@ def actions_equal(a: Action, b: Action) -> bool:
         and a.target_uid  == b.target_uid
         and a.mana_used   == b.mana_used
         and a.evolution_base_uid == b.evolution_base_uid
+        and a.twinpact_face == b.twinpact_face
         and a.discard_uid == b.discard_uid
         and a.choice      == b.choice
         and a.selected_uids == b.selected_uids
@@ -959,15 +1023,18 @@ ACTION_TYPE_INDEX: dict[ActionType, int] = {
     ActionType.USE_G_ZERO:            15,
     ActionType.USE_ATTACK_CHANCE:     16,
     ActionType.USE_G_STRIKE:          17,
-    ActionType.HYPERIZE:              18,
-    ActionType.SELECT_TARGET:         19,
-    ActionType.SELECT_MANA:           20,
-    ActionType.SELECT_CARD:           21,
-    ActionType.SELECT_YES_NO:         22,
-    ActionType.SELECT_ATTACK_ORDER:   23,
-    ActionType.SELECT_EVOLUTION_BASE: 24,
-    ActionType.PASS:                  25,
-    ActionType.COMBINE_KING_CREATURE: 26,
+    ActionType.USE_OVER_DRIVE:        18,
+    ActionType.USE_SABAKI_Z:          19,
+    ActionType.HYPERIZE:              20,
+    ActionType.SELECT_TARGET:         21,
+    ActionType.SELECT_MANA:           22,
+    ActionType.SELECT_CARD:           23,
+    ActionType.SELECT_YES_NO:         24,
+    ActionType.SELECT_ATTACK_ORDER:   25,
+    ActionType.SELECT_EVOLUTION_BASE: 26,
+    ActionType.PASS:                  27,
+    ActionType.COMBINE_KING_CREATURE: 28,
+    ActionType.ACTIVATE_ABILITY:      29,
 }
 
 NUM_ACTION_TYPES = len(ACTION_TYPE_INDEX)
