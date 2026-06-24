@@ -12,6 +12,15 @@ data/self_play/
 data/reports/
 dm_engine/models/
 
+# LLM fine-tuning (scripts, datasets, LoRA checkpoints)
+finetune_parser/
+lfm25-jp-duelmasters/
+lfm25-jp-duelmasters-final/
+dm_train/
+dm_val/
+test_lora_parser.py
+lora-error.txt
+
 # Generated crawler outputs
 *.log
 crawler/state/
