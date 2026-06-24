@@ -719,6 +719,7 @@ class Creature:
           - Power modifiers to other creatures (via GlobalEffectRegistry)
           - Keyword grants to other creatures (via GlobalEffectRegistry)
           - Registration of per-card global effects
+          - Registration of triggered effects in TriggerRegistry
 
         NOTE: Phase filtering is applied at entry time. For proper phase-gated
         static effects (e.g., effects that only work during MAIN phase), the engine
@@ -727,7 +728,8 @@ class Creature:
         only be applied if the creature enters during an active phase.
         """
         from core.global_effects import GlobalEffect, GlobalEffectType
-        from core.enums import Phase
+        from core.enums import Phase, TriggerEvent
+        from core.cards import CardEffect
 
         # Inline phase filtering to avoid circular import with engine.action_generator
         def _effect_active_in_phase(effect, phase: Phase) -> bool:
@@ -749,6 +751,18 @@ class Creature:
         current_phase = game_state.current_phase
         effects = self.definition.get_static_effects()
         effects = _filter_effects_by_phase(effects, current_phase)
+
+        # Register triggered effects in the trigger registry
+        # Get ALL triggered effects (not phase-filtered for registration - they'll be filtered at fire time)
+        all_effects = self.definition.get_triggered_effects()
+        for i, card_effect in enumerate(all_effects):
+            if card_effect.trigger_event != TriggerEvent.NONE:
+                game_state.trigger_registry.register(
+                    source_uid=self.uid,
+                    source_card_id=self.id,
+                    ability_index=i,
+                    effect=card_effect,
+                )
 
         for card_effect in effects:
             self.static_effects.append(card_effect)
@@ -850,10 +864,37 @@ class Creature:
         Cleans up:
         - GlobalEffectRegistry (power mods, keyword grants, etc.)
         - ReplacementEffectRegistry (rule 609 replacement effects)
+        - TriggerRegistry (triggered effects)
         """
         self.static_effects.clear()
         game_state.global_effects.remove_by_source(self.uid)
         game_state.replacement_effects.unregister(self.uid)
+        game_state.trigger_registry.unregister_source(self.uid)
+
+    def reapply_static_effects(self, game_state) -> None:
+        """
+        Re-evaluate and re-apply static effects based on the current phase.
+        
+        This is called when the game phase changes, to handle static effects
+        that have phase restrictions (active_in_phase != ("any",)).
+        
+        Only re-applies if the creature has static effects with non-"any" phase restrictions,
+        to avoid unnecessary work for creatures with always-active static effects.
+        """
+        # Check if any static effects have phase restrictions
+        has_phase_restricted = False
+        for effect in self.definition.get_static_effects():
+            active_phases = effect.active_in_phase
+            if active_phases and "any" not in active_phases:
+                has_phase_restricted = True
+                break
+        
+        if not has_phase_restricted:
+            return  # No phase-restricted effects, nothing to re-evaluate
+        
+        # Remove existing static effects and re-apply with current phase
+        self.remove_static_effects(game_state)
+        self.apply_static_effects(game_state)
 
     def __repr__(self) -> str:
         state = []

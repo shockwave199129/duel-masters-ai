@@ -48,6 +48,9 @@ class PlayerState:
     # Castles waiting to be moved to graveyard after fortified shields leave.
     detached_castles: list[CardDefinition] = field(default_factory=list)
 
+    # Field zone: Field cards deployed by DEPLOY_FIELD effects (rule 308, 701.27)
+    field_zone:      list[CardDefinition] = field(default_factory=list)
+
     # ── Extra zones (rule 407, 408) ───────────────────────────────────────────
     # Hyperspatial zone: Psychic creatures, Draghearts, Duel Mates waiting to be
     # summoned. Face-up and visible to both players (rule 407.2).

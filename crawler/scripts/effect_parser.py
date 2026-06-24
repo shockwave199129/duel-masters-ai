@@ -32,6 +32,67 @@ from pydantic import BaseModel
 from scripts.rules_context import RulesContextConfig, build_rules_context
 
 logger = logging.getLogger(__name__)
+# ── Valid enum values (synced with dm_engine.core.enums) ──────────────────────
+# Keep these in sync with dm_engine/core/enums.py
+
+VALID_EFFECT_TYPES = {
+    "keyword", "triggered", "activated", "static", "replacement", "cost_mod", "spell"
+}
+
+VALID_TRIGGER_EVENTS = {
+    "on_enter_battle_zone", "on_attack", "on_break_shield", "on_destroy",
+    "on_leave_battle_zone", "start_of_turn", "end_of_turn", "on_summon",
+    "on_cast", "on_shield_trigger", "on_draw", "on_mana_charge", "on_block",
+    "on_battle", "on_win_battle", "on_direct_attack", "before_break", "none"
+}
+
+VALID_EFFECT_ACTIONS = {
+    "draw", "destroy", "return_to_hand", "search_deck", "put_to_mana", "summon_free",
+    "put_to_battle_zone", "put_to_shield", "add_to_hand", "discard", "tap", "untap",
+    "power_modify", "power_fix", "cannot_attack", "cannot_be_blocked", "cannot_be_destroyed",
+    "win_battle", "break_shield", "look_at_top", "shuffle", "cost_reduce", "cost_increase",
+    "give_keyword", "banish_to_abyss", "move_zone", "reveal", "gr_summon", "copy_effect",
+    "attach_seal", "remove_seal", "gachinko_judge", "hyperize", "awaken", "awaken_link",
+    "dragsolve", "link_release", "dragon_soul_evasion", "psychic_release", "dragon_evasion",
+    "twinpact_flip", "forbidden_flip", "combine", "extra_ex_life", "zerom_ritual", "zerom_flip",
+    "forbidden_release", "neo_evolve", "win_condition", "lose_condition", "evolve",
+    "cross_gear", "god_link", "fortify", "deploy_field", "swap_zones", "turn_upside_down",
+    "forbidden_explosion", "protection", "gain_control", "zerom_birth", "shieldify",
+    "must_attack", "must_block", "cannot_block", "none"
+}
+
+VALID_ZONES = {
+    "battle_zone", "shield_zone", "mana_zone", "graveyard", "hand", "deck",
+    "hyperspatial", "ultra_gr", "abyss_zone", "pending"
+}
+
+VALID_PHASES = {
+    "start_of_turn", "draw", "mana_charge", "main", "attack", "end_of_turn",
+    "attack_declare", "block_declare", "battle", "direct_attack", "end_of_attack",
+    "any"
+}
+
+
+def _validate_effect_enums(effect: dict) -> list[str]:
+    """Validate enum fields in an effect dict. Returns list of error messages."""
+    errors = []
+    et = effect.get("effect_type")
+    if et not in VALID_EFFECT_TYPES:
+        errors.append(f"invalid effect_type: {et!r} (valid: {sorted(VALID_EFFECT_TYPES)})")
+    te = effect.get("trigger_event")
+    if te not in VALID_TRIGGER_EVENTS:
+        errors.append(f"invalid trigger_event: {te!r} (valid: {sorted(VALID_TRIGGER_EVENTS)})")
+    ea = effect.get("effect_action")
+    if ea not in VALID_EFFECT_ACTIONS:
+        errors.append(f"invalid effect_action: {ea!r} (valid: {sorted(VALID_EFFECT_ACTIONS)})")
+    for zone in effect.get("active_in_zone", ["battle_zone"]):
+        if zone not in VALID_ZONES:
+            errors.append(f"invalid active_in_zone: {zone!r} (valid: {sorted(VALID_ZONES)})")
+    for phase in effect.get("active_in_phase", ["any"]):
+        if phase not in VALID_PHASES:
+            errors.append(f"invalid active_in_phase: {phase!r} (valid: {sorted(VALID_PHASES)})")
+    return errors
+
 
 EMPTY_USAGE = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 LLM_PROVIDERS = ("openrouter", "openai", "ollama", "local-hf", "nvidia")
@@ -154,7 +215,7 @@ Each effect object must have these exact fields:
   "effect_type": "<one of: keyword|triggered|activated|static|replacement|cost_mod|spell>",
   "trigger_event": "<one of: on_enter_battle_zone|on_attack|on_break_shield|on_destroy|on_leave_battle_zone|start_of_turn|end_of_turn|on_summon|on_cast|on_battle|on_block|on_draw|on_mana_charge|on_shield_trigger|on_win_battle|on_direct_attack|before_break|none>",
   "trigger_condition": "<JSON object as a string, or null>",
-  "effect_action": "<one of: draw|destroy|return_to_hand|search_deck|put_to_mana|summon_free|put_to_battle_zone|put_to_shield|add_to_hand|discard|tap|untap|power_modify|power_fix|cannot_attack|cannot_be_blocked|cannot_be_destroyed|win_battle|break_shield|look_at_top|shuffle|cost_reduce|cost_increase|give_keyword|banish_to_abyss|move_zone|reveal|GR_summon|copy_effect|attach_seal|remove_seal|gachinko_judge|hyperize|awaken|awaken_link|dragsolve|link_release|dragon_soul_evasion|psychic_release|dragon_evasion|twinpact_flip|forbidden_flip|combine|extra_ex_life|zerom_ritual|zerom_flip|forbidden_release|neo_evolve|win_condition|lose_condition|evolve|cross_gear|god_link|fortify|deploy_field|swap_zones|turn_upside_down|forbidden_explosion|protection|gain_control|zerom_birth|shieldify|must_attack|must_block|cannot_block|none>",
+  "effect_action": "<one of: draw|destroy|return_to_hand|search_deck|put_to_mana|summon_free|put_to_battle_zone|put_to_shield|add_to_hand|discard|tap|untap|power_modify|power_fix|cannot_attack|cannot_be_blocked|cannot_be_destroyed|win_battle|break_shield|look_at_top|shuffle|cost_reduce|cost_increase|give_keyword|banish_to_abyss|move_zone|reveal|gr_summon|copy_effect|attach_seal|remove_seal|gachinko_judge|hyperize|awaken|awaken_link|dragsolve|link_release|dragon_soul_evasion|psychic_release|dragon_evasion|twinpact_flip|forbidden_flip|combine|extra_ex_life|zerom_ritual|zerom_flip|forbidden_release|neo_evolve|win_condition|lose_condition|evolve|cross_gear|god_link|fortify|deploy_field|swap_zones|turn_upside_down|forbidden_explosion|protection|gain_control|zerom_birth|shieldify|must_attack|must_block|cannot_block|none>",
   "effect_target": "<JSON object as a string, or null>",
   "effect_value": "<JSON value as a string, or null>",
   "is_optional": <boolean>,
@@ -1039,6 +1100,29 @@ def _save_effects(conn, card_id: int, effects: list[dict]):
         cur.execute("DELETE FROM card_effects WHERE card_id = %s", (card_id,))
 
         for eff in effects:
+            # Validate enum values before inserting
+            errors = _validate_effect_enums(eff)
+            if errors:
+                logger.warning(
+                    "Card %d effect %d has enum validation errors: %s",
+                    card_id, eff.get("ability_index", 0), "; ".join(errors)
+                )
+                # Fix invalid enums to safe defaults to avoid DB constraint issues
+                if eff.get("effect_type") not in VALID_EFFECT_TYPES:
+                    eff["effect_type"] = "triggered"
+                if eff.get("trigger_event") not in VALID_TRIGGER_EVENTS:
+                    eff["trigger_event"] = "none"
+                if eff.get("effect_action") not in VALID_EFFECT_ACTIONS:
+                    eff["effect_action"] = "none"
+                eff["active_in_zone"] = [
+                    z if z in VALID_ZONES else "battle_zone"
+                    for z in eff.get("active_in_zone", ["battle_zone"])
+                ]
+                eff["active_in_phase"] = [
+                    p if p in VALID_PHASES else "any"
+                    for p in eff.get("active_in_phase", ["any"])
+                ]
+
             cur.execute(
                 """
                 INSERT INTO card_effects (

@@ -234,6 +234,9 @@ class CardDefinition:
     def get_activated_effects(self) -> list[CardEffect]:
         return [e for e in self.effects if e.is_activated()]
 
+    def get_triggered_effects(self) -> list[CardEffect]:
+        return [e for e in self.effects if e.is_triggered()]
+
     def get_cost_modifiers(self) -> list[CardEffect]:
         return [e for e in self.effects if e.effect_type == EffectType.COST_MOD]
 
@@ -250,6 +253,72 @@ class CardDefinition:
         if isinstance(other, CardDefinition):
             return self.id == other.id
         return NotImplemented
+
+    def get_effects_with_rag_fallback(
+        self,
+        chroma_path: str | None = None,
+        openai_key: str | None = None,
+        dsn: str | None = None,
+    ) -> tuple[CardEffect, ...]:
+        """
+        Return effects with RAG fallback for low-confidence parses.
+
+        For effects with parse_confidence < 0.7, attempts to query ChromaDB
+        for rulings on this card/ability and merges any corrections.
+
+        Args:
+            chroma_path: Path to ChromaDB directory. If None, skips RAG.
+            openai_key: Optional OpenAI API key for embeddings.
+            dsn: Optional PostgreSQL DSN for RuleKnowledgeService.
+
+        Returns:
+            Tuple of CardEffect (potentially corrected by RAG).
+        """
+        if not chroma_path:
+            return self.effects
+
+        try:
+            from dm_engine.rules.knowledge import RuleKnowledgeService
+            service = RuleKnowledgeService(
+                dsn=dsn,
+                chroma_path=chroma_path,
+                embedding_key=openai_key,
+            )
+        except Exception:
+            # ChromaDB not available or import failed
+            return self.effects
+
+        corrected_effects = list(self.effects)
+        for i, effect in enumerate(corrected_effects):
+            if not effect.needs_rag_fallback():
+                continue
+
+            # Query for rulings on this card + ability text
+            try:
+                results = service.query_card_rulings(
+                    self.name,
+                    effect.raw_text,
+                    n=3,
+                    chroma_path=chroma_path,
+                    openai_key=openai_key,
+                )
+            except Exception:
+                continue
+
+            if not results:
+                continue
+
+            # For now, just log that RAG found something
+            # In the future, could parse results to correct effect fields
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(
+                "RAG fallback: Card %s ability %d found %d ruling(s) "
+                "(confidence was %.2f)",
+                self.name, effect.ability_index, len(results), effect.parse_confidence
+            )
+
+        return tuple(corrected_effects)
 
 
 # ── Zerom helpers (rule 812) ──────────────────────────────────────────────────

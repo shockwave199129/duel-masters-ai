@@ -309,6 +309,11 @@ class GameState:
     # (core should not depend on engine at module load time).
     layer_effects: object = field(default_factory=lambda: __import__("engine.layers", fromlist=["LayerEffectRegistry"]).LayerEffectRegistry())
 
+    # ── Trigger registry (data-driven trigger dispatch) ─────────────────────────
+    # Maps TriggerEvent -> list of registered triggered effects from permanents.
+    # Lazy-import to avoid circular dependency (core should not depend on engine).
+    trigger_registry: object = field(default_factory=lambda: __import__("engine.trigger_registry", fromlist=["TriggerRegistry"]).TriggerRegistry())
+
     # ── Game result ───────────────────────────────────────────────────────────
     result:         GameResult = GameResult.IN_PROGRESS
 

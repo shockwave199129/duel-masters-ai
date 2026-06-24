@@ -328,6 +328,70 @@ class RuleKnowledgeService:
             return ""
         return "\n\n".join(f"[{rule.rule_number}] {rule.text}" for rule in rules)
 
+    def query_card_rulings(
+        self,
+        card_name: str,
+        ability_text: str,
+        *,
+        n: int = 3,
+        chroma_path: str | None = None,
+        openai_key: str | None = None,
+    ) -> list[dict]:
+        """
+        Query ChromaDB for card-specific rulings.
+
+        This searches a separate 'card_rulings' collection (if it exists)
+        for rulings related to a specific card and ability.
+
+        Args:
+            card_name: Name of the card (e.g., "Bolshack Dragon")
+            ability_text: The ability text to search for
+            n: Number of results to return
+            chroma_path: Override ChromaDB path (defaults to self.chroma_path)
+            openai_key: Override OpenAI key (defaults to self.embedding_key)
+
+        Returns:
+            List of dicts with keys: text, score, metadata
+        """
+        path = chroma_path or self.chroma_path
+        key = openai_key or self.embedding_key
+
+        if not path:
+            return []
+
+        try:
+            from rules_ingest.ingest_chroma import _get_embedding_function
+            import chromadb
+            ef = _get_embedding_function(key)
+            client = chromadb.PersistentClient(path=path)
+            collection = client.get_collection(
+                name="card_rulings",
+                embedding_function=ef,
+            )
+        except Exception:
+            # Collection doesn't exist or ChromaDB not available
+            return []
+
+        query = f"{card_name}: {ability_text}"
+        try:
+            results = collection.query(
+                query_texts=[query],
+                n_results=n,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception as exc:
+            logger.warning("Could not query card_rulings: %s", exc)
+            return []
+
+        output = []
+        for i in range(len(results["ids"][0])):
+            output.append({
+                "text": results["documents"][0][i],
+                "score": 1 - results["distances"][0][i],
+                "metadata": results["metadatas"][0][i],
+            })
+        return output
+
     def _connect(self):
         if not self.dsn:
             raise RuntimeError("RuleKnowledgeService requires a PostgreSQL DSN")

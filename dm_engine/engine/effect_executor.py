@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import random
 
-from core.cards import CardDefinition, is_hyper_mode
-from core.enums import EffectAction
+from core.cards import CardDefinition, CardEffect, is_hyper_mode
+from core.enums import EffectAction, CardSubtype
 from core.state import AwaitedChoice, GameState, PendingTrigger
 from core.zones import Creature, HandCard, ManaCard, ShieldCard, PowerModifier
+from engine.god_manager import GodManager
 from engine.sba_checker import check_state_based_actions
 from engine.zone_mover import (
     _new_uid,
     combine_king_cells,
+    cross_gear_to_creature,
     draw_card,
     dragsolve_dragheart,
     awaken_psychic_creature,
     flip_twinpact,
     flip_forbidden,
+    fortify_shield_with_castle,
     link_psychic_cells,
     move_battle_to_graveyard,
     move_battle_to_hyperspatial,
@@ -231,38 +234,38 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
         _do_lose_by_effect(s, controller, trigger)
     # ── Zone operations (Tier 3 / TODO 10) ──────────────────────────────────────
     elif action == EffectAction.EVOLVE:
-        pass  # TODO: implement evolution mechanic (rules 701.15, 801)
+        _do_evolve(s, controller, trigger)
     elif action == EffectAction.CROSS_GEAR:
-        pass  # TODO: implement Cross Gear attachment (rules 701.17, 303)
+        _do_cross_gear(s, controller, trigger)
     elif action == EffectAction.GOD_LINK:
-        pass  # TODO: implement God link (rules 701.18, 804)
+        _do_god_link(s, controller, trigger)
     elif action == EffectAction.FORTIFY:
-        pass  # TODO: implement fortify (rules 701.19, 304)
+        _do_fortify(s, controller, trigger)
     elif action == EffectAction.DEPLOY_FIELD:
-        pass  # TODO: implement Field deployment (rules 701.27, 308)
+        _do_deploy_field(s, controller, trigger)
     elif action == EffectAction.SWAP_ZONES:
-        pass  # TODO: implement zone swap (rule 701.26)
+        _do_swap_zones(s, controller, trigger)
     elif action == EffectAction.TURN_UPSIDE_DOWN:
-        pass  # TODO: implement Field flip (rule 701.28)
+        _do_turn_upside_down(s, controller, trigger)
     elif action == EffectAction.FORBIDDEN_EXPLOSION:
-        pass  # TODO: implement Final Forbidden flip (rule 701.29)
+        _do_forbidden_explosion(s, controller, trigger)
     # ── Defensive / Offensive (Tier 3 / TODO 11) ────────────────────────────────
     elif action == EffectAction.PROTECTION:
-        pass  # TODO: implement protection effect
+        _do_protection(s, controller, trigger)
     elif action == EffectAction.GAIN_CONTROL:
-        pass  # TODO: implement gain control effect
+        _do_gain_control(s, controller, trigger)
     # ── Field state (Tier 3 / TODO 12) ──────────────────────────────────────────
     elif action == EffectAction.ZEROM_BIRTH:
-        pass  # TODO: implement Zerom birth (rule 701.31)
+        _do_zerom_birth(s, controller, trigger)
     elif action == EffectAction.SHIELDIFY:
-        pass  # TODO: implement shieldify (rule 701.32)
+        _do_shieldify(s, controller, trigger)
     # ── Mandatory actions (Tier 3 / TODO 13) ────────────────────────────────────
     elif action == EffectAction.MUST_ATTACK:
-        pass  # TODO: implement must-attack effect
+        _do_must_attack(s, controller, trigger)
     elif action == EffectAction.MUST_BLOCK:
-        pass  # TODO: implement must-block effect
+        _do_must_block(s, controller, trigger)
     elif action == EffectAction.CANNOT_BLOCK:
-        pass  # TODO: implement cannot-block effect
+        _do_cannot_block(s, controller, trigger)
     # EffectAction.NONE and unknown values intentionally no-op.
 
     # Clear the "resolving effect" flag and run SBAs (rule 101.4d)
@@ -975,3 +978,466 @@ def _do_neo_evolve(state: GameState, controller: int, trigger: PendingTrigger) -
                 p_state.hand.remove(hc)
                 creature.evolution_stack.append(hc.definition)
                 break
+
+
+# ── 7 Missing EffectAction Handlers (Gaps G2) ──────────────────────────────────────
+
+def _do_protection(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle PROTECTION effect: creature gains protection from specific civilizations or races.
+    
+    Effect value can contain:
+    - protect_from_civ: Civilization name or list (e.g., "fire", ["fire", "light"])
+    - protect_from_race: Race name or list (e.g., "Dragon", ["Dragon", "Armored Dragon"])
+    - duration: "until_end_of_turn" (default) or "while_in_play"
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    target_uid = data.get("target_uid")
+    found = _find_creature(state, target_uid)
+    if not found:
+        return
+    _, creature = found
+    
+    protect_from_civ = effect.get("protect_from_civ") or effect.get("protect_from")
+    protect_from_race = effect.get("protect_from_race")
+    duration = effect.get("duration", "until_end_of_turn")
+    
+    # Store protection info in temp_flags
+    protection_data = {
+        "from_civ": protect_from_civ if isinstance(protect_from_civ, list) else [protect_from_civ] if protect_from_civ else [],
+        "from_race": protect_from_race if isinstance(protect_from_race, list) else [protect_from_race] if protect_from_race else [],
+        "duration": duration,
+    }
+    creature.temp_flags["protection"] = protection_data
+
+
+def _do_gain_control(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle GAIN_CONTROL effect: take control of opponent's creature.
+    
+    Effect value:
+    - target_uid: UID of creature to gain control of
+    - duration: "until_end_of_turn" (default) or "permanent"
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    target_uid = data.get("target_uid") or effect.get("target_uid")
+    if not target_uid:
+        return
+    
+    # Find the creature (could be anywhere)
+    found = _find_creature(state, target_uid)
+    if not found:
+        return
+    player_idx, creature = found
+    
+    # Don't allow gaining control of your own creature
+    if player_idx == controller:
+        return
+    
+    duration = effect.get("duration", "until_end_of_turn")
+    
+    # Remove from opponent's battle zone
+    opponent_state = state.players[player_idx]
+    opponent_state.battle_zone = [c for c in opponent_state.battle_zone if c.uid != target_uid]
+    
+    # Add to controller's battle zone
+    creature.controller = controller
+    creature.temp_flags["gained_control"] = {
+        "original_controller": player_idx,
+        "duration": duration,
+    }
+    creature.entered_turn = state.turn_number
+    creature.has_summoning_sickness = True  # New controller gets summoning sickness
+    
+    state.players[controller].battle_zone.append(creature)
+    
+    # Remove static effects from old controller's perspective
+    creature.remove_static_effects(state)
+    # Apply static effects for new controller
+    creature.apply_static_effects(state)
+
+
+def _do_zerom_birth(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle ZEROM_BIRTH effect: flip a Zerom ritual/nebula to its creature face.
+    
+    Similar to DRAGSOLVE but for Zerom cards (Rule 812 / 701.31).
+    The trigger should target a Zerom card in the battle zone.
+    """
+    data = _trigger_data(trigger)
+    target_uid = data.get("target_uid") or data.get("creature_uid")
+    if not target_uid:
+        return
+    
+    found = _find_creature(state, target_uid)
+    if not found:
+        return
+    _, creature = found
+    
+    # Check if this is a Zerom
+    if not creature.definition.card_subtype == CardSubtype.ZEROM:
+        return
+    
+    # Use the move_zerom_to_battle function which handles the flip
+    move_zerom_to_battle(state, controller, creature.definition)
+
+
+def _do_shieldify(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle SHIELDIFY effect: turn a card into a face-down shield.
+    
+    Effect value:
+    - from_zone: "hand" (default) or "deck"
+    - card_uid: specific card to shieldify (optional, otherwise random)
+    - target_player: 0 or 1 (who gets the shield, default: controller)
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    from_zone = effect.get("from_zone", "hand")
+    target_player = effect.get("target_player", controller)
+    card_uid = data.get("card_uid") or effect.get("card_uid")
+    
+    p_state = state.players[controller]
+    target_p_state = state.players[target_player]
+    
+    if from_zone == "hand":
+        if card_uid:
+            # Find specific card
+            hand_card = p_state.find_in_hand(card_uid)
+            if not hand_card:
+                return
+            p_state.hand.remove(hand_card)
+            target_p_state.shield_zone.append(ShieldCard(definition=hand_card.definition, uid=hand_card.uid))
+        else:
+            # Random card from hand
+            if not p_state.hand:
+                return
+            hand_card = random.choice(p_state.hand)
+            p_state.hand.remove(hand_card)
+            target_p_state.shield_zone.append(ShieldCard(definition=hand_card.definition, uid=hand_card.uid))
+    
+    elif from_zone == "deck":
+        deck = p_state.deck
+        if not deck:
+            return
+        if card_uid:
+            # Find specific card in deck
+            for i, defn in enumerate(deck):
+                if defn.id == card_uid or (hasattr(defn, 'uid') and defn.uid == card_uid):
+                    definition = deck.pop(i)
+                    target_p_state.shield_zone.append(ShieldCard(definition=definition))
+                    break
+        else:
+            # Top card of deck
+            definition = deck.pop(0)
+            target_p_state.shield_zone.append(ShieldCard(definition=definition))
+
+
+def _do_must_attack(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle MUST_ATTACK effect: creature must attack if able.
+    
+    Sets a flag that the action generator will check to force attack.
+    """
+    data = _trigger_data(trigger)
+    target_uid = data.get("target_uid")
+    found = _find_creature(state, target_uid)
+    if not found:
+        return
+    _, creature = found
+    creature.temp_flags["must_attack"] = True
+
+
+def _do_must_block(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle MUST_BLOCK effect: creature must block if able.
+    
+    Sets a flag that the action generator will check to force block.
+    """
+    data = _trigger_data(trigger)
+    target_uid = data.get("target_uid")
+    found = _find_creature(state, target_uid)
+    if not found:
+        return
+    _, creature = found
+    creature.temp_flags["must_block"] = True
+
+
+def _do_cannot_block(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle CANNOT_BLOCK effect: creature cannot be chosen as a blocker.
+    
+    Sets a flag that the action generator will check to prevent blocking.
+    """
+    data = _trigger_data(trigger)
+    target_uid = data.get("target_uid")
+    found = _find_creature(state, target_uid)
+    if not found:
+        return
+    _, creature = found
+    creature.temp_flags["cannot_block"] = True
+
+# ── Zone operations (Tier 3 / TODO 10) ────────────────────────────────────────
+
+def _do_evolve(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle EVOLVE effect: evolve a creature by placing an evolution creature on top of a base.
+
+    Effect value:
+    - target_uid: UID of the base creature to evolve (in battle zone)
+    - evolve_card_uid: UID of the evolution creature in hand
+    - is_neo: boolean (if NEO Evolution)
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    target_uid = data.get("target_uid") or effect.get("target_uid")
+    evolve_card_uid = data.get("evolve_card_uid") or effect.get("evolve_card_uid")
+    if not target_uid or not evolve_card_uid:
+        return
+
+    # Find the base creature in battle zone
+    found = _find_creature(state, target_uid)
+    if not found:
+        return
+    _, base_creature = found
+
+    # Move the evolution creature from hand to battle, stacking on base
+    move_hand_to_battle(state, controller, evolve_card_uid, evolution_base_uid=target_uid)
+
+
+def _do_cross_gear(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle CROSS_GEAR effect: attach a Cross Gear from hand to a creature.
+
+    Effect value:
+    - target_uid: UID of the creature to attach to (in battle zone)
+    - gear_uid: UID of the Cross Gear in hand
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    target_uid = data.get("target_uid") or effect.get("target_uid")
+    gear_uid = data.get("gear_uid") or effect.get("gear_uid")
+    if not target_uid or not gear_uid:
+        return
+
+    cross_gear_to_creature(state, controller, gear_uid, target_uid)
+
+
+def _do_god_link(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle GOD_LINK effect: link God cards together (Rule 804).
+
+    Effect value:
+    - source_uid: UID of the God creature in battle zone
+    - link_card_uid: UID of the God card in hand to link
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    source_uid = data.get("source_uid") or effect.get("source_uid")
+    link_card_uid = data.get("link_card_uid") or effect.get("link_card_uid")
+    if not source_uid or not link_card_uid:
+        return
+
+    # Find the source creature in battle zone
+    found = _find_creature(state, source_uid)
+    if not found:
+        return
+    _, source_creature = found
+
+    # Find the link card in hand
+    p_state = state.players[controller]
+    hand_card = p_state.find_in_hand(link_card_uid)
+    if not hand_card:
+        return
+
+    # Validate God link compatibility
+    if not GodManager.validate_god_link(source_creature.definition, hand_card.definition):
+        return
+
+    # Move the link card from hand to battle zone, attached to the source
+    p_state.hand.remove(hand_card)
+    source_creature.attached_cards.append(hand_card.definition)
+    source_creature.temp_flags["god_linked"] = True
+
+
+def _do_fortify(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle FORTIFY effect: fortify a shield with a Castle from hand.
+
+    Effect value:
+    - target_uid: UID of the shield to fortify
+    - castle_uid: UID of the Castle in hand
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    target_uid = data.get("target_uid") or effect.get("target_uid")
+    castle_uid = data.get("castle_uid") or effect.get("castle_uid")
+    if not target_uid or not castle_uid:
+        return
+
+    fortify_shield_with_castle(state, controller, castle_uid, target_uid)
+
+
+def _do_deploy_field(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle DEPLOY_FIELD effect: deploy a Field card from hand to the field zone.
+
+    Effect value:
+    - field_uid: UID of the Field card in hand
+    - target_player: player who gets the field (default: controller)
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    field_uid = data.get("field_uid") or effect.get("field_uid")
+    target_player = effect.get("target_player", controller)
+    if not field_uid:
+        return
+
+    p_state = state.players[controller]
+    hand_card = p_state.find_in_hand(field_uid)
+    if not hand_card:
+        return
+
+    # Remove from hand and add to field zone
+    p_state.hand.remove(hand_card)
+    target_p_state = state.players[target_player]
+    target_p_state.field_zone.append(hand_card.definition)
+
+
+def _do_swap_zones(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle SWAP_ZONES effect: swap cards between zones (Revolution Change).
+
+    Effect value:
+    - from_zone_a: first zone (e.g., "hand", "battle_zone")
+    - from_zone_b: second zone
+    - card_uid_a: UID of card in first zone
+    - card_uid_b: UID of card in second zone (optional, if swapping specific cards)
+    - target_player: player whose zones to swap (default: controller)
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    from_zone_a = effect.get("from_zone_a")
+    from_zone_b = effect.get("from_zone_b")
+    card_uid_a = data.get("card_uid_a") or effect.get("card_uid_a")
+    card_uid_b = data.get("card_uid_b") or effect.get("card_uid_b")
+    target_player = effect.get("target_player", controller)
+
+    if not from_zone_a or not from_zone_b or not card_uid_a:
+        return
+
+    p_state = state.players[target_player]
+
+    # Get the two cards
+    zone_a = getattr(p_state, from_zone_a, None)
+    zone_b = getattr(p_state, from_zone_b, None)
+    if zone_a is None or zone_b is None:
+        return
+
+    card_a = None
+    for c in zone_a:
+        if getattr(c, "uid", None) == card_uid_a:
+            card_a = c
+            break
+    if not card_a:
+        return
+
+    card_b = None
+    if card_uid_b:
+        for c in zone_b:
+            if getattr(c, "uid", None) == card_uid_b:
+                card_b = c
+                break
+    else:
+        # If no specific card_b, pick first valid card in zone_b
+        if zone_b:
+            card_b = zone_b[0]
+
+    if not card_b:
+        return
+
+    # Perform the swap
+    zone_a.remove(card_a)
+    zone_b.remove(card_b)
+
+    # Add to opposite zones
+    if from_zone_b == "battle_zone" and isinstance(card_b, Creature):
+        state.global_effects.remove_by_source(card_b.uid)
+    if from_zone_a == "battle_zone" and isinstance(card_a, Creature):
+        state.global_effects.remove_by_source(card_a.uid)
+
+    # Convert to appropriate zone types
+    def _add_to_zone(state, player_idx, zone_name, card_def, uid):
+        p = state.players[player_idx]
+        if zone_name == "hand":
+            p.hand.append(HandCard(definition=card_def, uid=uid))
+        elif zone_name == "battle_zone":
+            if isinstance(card_def, CardDefinition):
+                p.battle_zone.append(
+                    Creature(
+                        definition=card_def,
+                        uid=uid,
+                        controller=player_idx,
+                        owner=player_idx,
+                        entered_turn=state.turn_number,
+                        has_summoning_sickness=True,
+                    )
+                )
+        elif zone_name == "mana_zone":
+            p.mana_zone.append(ManaCard.from_charge(card_def))
+        elif zone_name == "shield_zone":
+            p.shield_zone.append(ShieldCard(definition=card_def, uid=uid))
+        elif zone_name == "graveyard":
+            p.graveyard.insert(0, card_def)
+
+    _add_to_zone(state, target_player, from_zone_b, card_a.definition, card_a.uid)
+    _add_to_zone(state, target_player, from_zone_a, card_b.definition, card_b.uid)
+
+
+def _do_turn_upside_down(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle TURN_UPSIDE_DOWN effect: flip a Field card upside down (Rule 701.28).
+
+    Effect value:
+    - field_uid: UID of the Field card in the field zone
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    field_uid = data.get("field_uid") or effect.get("field_uid")
+    if not field_uid:
+        return
+
+    p_state = state.players[controller]
+    for idx, field_def in enumerate(p_state.field_zone):
+        if getattr(field_def, "uid", None) == field_uid or getattr(field_def, "id", None) == field_uid:
+            # Flip the field - replace with its flipped face if available
+            if hasattr(field_def, "flipped_definition") and field_def.flipped_definition:
+                p_state.field_zone[idx] = field_def.flipped_definition
+            else:
+                # Mark as flipped for visual/logic purposes
+                field_def.flipped = not getattr(field_def, "flipped", False)
+            break
+
+
+def _do_forbidden_explosion(state: GameState, controller: int, trigger: PendingTrigger) -> None:
+    """
+    Handle FORBIDDEN_EXPLOSION effect: flip Final Forbidden Field (Rule 701.29).
+
+    Effect value:
+    - field_uid: UID of the Final Forbidden Field in the field zone
+    """
+    data = _trigger_data(trigger)
+    effect = _effect_value(trigger)
+    field_uid = data.get("field_uid") or effect.get("field_uid")
+    if not field_uid:
+        return
+
+    p_state = state.players[controller]
+    for idx, field_def in enumerate(p_state.field_zone):
+        if getattr(field_def, "uid", None) == field_uid or getattr(field_def, "id", None) == field_uid:
+            # Flip the Final Forbidden Field to its other face
+            if hasattr(field_def, "flipped_definition") and field_def.flipped_definition:
+                p_state.field_zone[idx] = field_def.flipped_definition
+            break

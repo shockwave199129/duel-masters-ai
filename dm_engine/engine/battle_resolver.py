@@ -4,7 +4,7 @@ engine/battle_resolver.py — resolve Duel Masters battles.
 
 from __future__ import annotations
 
-from core.enums import Keyword, Phase, INFINITY
+from core.enums import Keyword, Phase, INFINITY, TriggerEvent
 from core.state import GameState
 from engine.sba_checker import check_state_based_actions
 
@@ -33,6 +33,15 @@ def resolve_battle(state: GameState) -> GameState:
         s.turn_info.phase = Phase.END_OF_ATTACK
         return s
     _, defender = defender_result
+
+    # Fire ON_BATTLE trigger (both participants)
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(s, TriggerEvent.ON_BATTLE, {
+        "attacker_uid": attacker.uid,
+        "defender_uid": defender.uid,
+        "attacker_player": ctx.attacker_player,
+        "defender_player": ctx.blocker_player if ctx.blocker_uid else ctx.attacker_player,
+    }, attacker.uid)
 
     attacker_always_wins = _wins_battles(attacker)
     defender_always_wins = _wins_battles(defender)
@@ -72,6 +81,26 @@ def resolve_battle(state: GameState) -> GameState:
             defender.set_flag("lost_battle", True)
         else:
             attacker.set_flag("lost_battle", True)
+
+    # Fire ON_WIN_BATTLE triggers
+    attacker_lost = attacker.temp_flags.get("lost_battle", False)
+    defender_lost = defender.temp_flags.get("lost_battle", False)
+    
+    if not attacker_lost:
+        fire_trigger(s, TriggerEvent.ON_WIN_BATTLE, {
+            "source_uid": attacker.uid,
+            "source_card_id": attacker.id,
+            "controller": ctx.attacker_player,
+            "opponent_uid": defender.uid,
+        }, attacker.uid)
+    
+    if not defender_lost:
+        fire_trigger(s, TriggerEvent.ON_WIN_BATTLE, {
+            "source_uid": defender.uid,
+            "source_card_id": defender.id,
+            "controller": ctx.blocker_player if ctx.blocker_uid else ctx.attacker_player,
+            "opponent_uid": attacker.uid,
+        }, defender.uid)
 
     s.turn_info.phase = Phase.END_OF_ATTACK
     return check_state_based_actions(s)

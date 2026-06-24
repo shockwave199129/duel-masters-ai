@@ -8,7 +8,7 @@ Duel Masters AI toolkit: a Python monorepo for scraping OCG card data, ingesting
 - `rules_ingest/` — markdown → structured rules → PostgreSQL/ChromaDB pipeline
 - `dm_engine/` — game simulator, bots (RandomBot, NeuralBot), self-play training
 
-**Technology stack**: Python 3.10+, PostgreSQL, ChromaDB, Playwright, PyTorch, Transformers, TRL, PEFT, OpenAI/OpenRouter APIs
+**Technology stack**: Python 3.10+, PostgreSQL, ChromaDB, Playwright, PyTorch, OpenAI/OpenRouter APIs (optional local-only: Transformers, TRL, PEFT for LLM fine-tuning)
 
 ## Reference
 
@@ -27,10 +27,20 @@ Duel Masters AI toolkit: a Python monorepo for scraping OCG card data, ingesting
 | `dm_engine/db/` | Card database interface (PostgreSQL) |
 | `dm_engine/training/` | Self-play orchestration, reward shaping, action-score training |
 | `dm_engine/models/` | Trained `.pt` checkpoints (git-ignored) |
-| `dm_engine/tests/` | 14 standalone test files |
+| `dm_engine/tests/` | 37 standalone test files (see list below) |
 | `dm_engine/scripts/` | CLI entry points for play, self-play, training |
 | `data/` | Generated self-play data and reports (git-ignored) |
+| `state/` | Crawler pipeline state file (git-ignored) |
 | `Duel_Masters_rules.md` | Canonical rules source for ingestion and audits |
+
+**Local-only (git-ignored, not in repo):**
+
+| Path | Purpose |
+|------|---------|
+| `finetune_parser/` | LLM finetuning scripts for Japanese card effect parsing (LFM25-JP) |
+| `lfm25-jp-duelmasters/` | Intermediate LoRA checkpoints |
+| `lfm25-jp-duelmasters-final/` | Final LoRA adapter + tokenizer |
+| `dm_train/` / `dm_val/` | Hugging Face Arrow datasets for LLM finetuning |
 
 ### Key Files
 - `requirements.txt` — Python dependencies
@@ -42,6 +52,24 @@ Duel Masters AI toolkit: a Python monorepo for scraping OCG card data, ingesting
 - `dm_engine/scripts/play_neural_game.py` — Play neural bot games
 - `dm_engine/scripts/run_self_play.py` — Self-play data generation
 - `dm_engine/scripts/train_action_score.py` — Train action scoring model
+
+### Engine Test Files (`dm_engine/tests/`)
+| File | Focus |
+|------|-------|
+| `test_action_executor.py` | Action execution & state mutation |
+| `test_action_generator.py` | Legal action generation |
+| `test_actions.py` | GameAction dataclasses & serialization |
+| `test_battle_shield_resolvers.py` | Battle zone & shield trigger resolution |
+| `test_continuous_effects.py` | Static ability / continuous effect layers |
+| `test_effect_executor.py` | Triggered effect resolution |
+| `test_phase7_8.py` | Turn phase 7 (end) & 8 (start) logic |
+| `test_replacement_effects.py` | Replacement effect application order |
+| `test_special_cards.py` | Specific card implementations |
+| `test_state_manager.py` | GameState serialization / cloning |
+| `test_rule_knowledge.py` | Rules DB query integration |
+| `test_crawler_engine_integration.py` | Card DB → engine integration |
+| `test_enum_sync.py` | Enum ↔ database sync validation |
+| ...and 24 more (`test_ability_types`, `test_apnap_trigger_ordering`, `test_attack_chance`, `test_calculation_order`, `test_cost_modifiers`, `test_effect_interruption`, `test_evolution_rules`, `test_game_loop`, `test_gods_core`, `test_king_cell_rules`, `test_mana_validation`, `test_negative_power`, `test_neural_v3_features`, `test_over_drive`, `test_prebuilt_decks`, `test_psychic_dragheart_rules`, `test_replacement_apnap`, `test_rule_cleanup`, `test_sabaki_z`, `test_sba_checker`, `test_s_trigger_batch`, `test_train_action_score_v3`, `test_training_deck_sampling`, `test_trigger_effect_resolvers`) |
 
 ## Essential Commands
 
@@ -193,6 +221,7 @@ JSONL lines contain: `game_id`, `step`, `state_tensor`, `legal_actions`, `chosen
 | Skipping SBA checks | State-based actions must run after every mutation | Call `SBAChecker.run_all(state)` in `PhaseController` |
 | Using pytest fixtures for engine tests | Tests are standalone scripts by design | Write self-contained scripts with `check()` helper |
 | Committing `.env` or generated files | Secrets and large artifacts | `.gitignore` covers these; never commit |
+| Committing LLM fine-tuning artifacts | Large checkpoints/datasets; local workflow only | Keep `finetune_parser/`, `lfm25-jp-*`, `dm_train/`, `dm_val/` git-ignored |
 | Importing torch in lightweight modules | Increases startup time, breaks CI | Lazy import or separate heavy module |
 
 ## Code Style
@@ -261,3 +290,10 @@ python -m compileall dm_engine rules_ingest crawler/scripts
 1. Generate self-play data: `run_self_play.py --preset standard --model-path <prev_gen> --output data/self_play/gen{N}_v2_games.jsonl`
 2. Train: `train_action_score.py --input data/self_play/gen{N}_v2_games.jsonl --output dm_engine/models/gen{N+1}_v2_action_score.pt --epochs 10`
 3. Evaluate: `play_neural_game.py --model-path dm_engine/models/gen{N+1}_v2_action_score.pt --mode neural-vs-neural`
+
+### Finetuning Japanese Effect Parser (LFM25-JP, local-only)
+Optional workflow; scripts and outputs are git-ignored and must exist locally.
+1. Prepare dataset from scraped cards: `python finetune_parser/prepare_dataset.py`
+2. Run LoRA finetuning: `python finetune_parser/finetune_lfm25_jp.py`
+3. Adapter outputs to `lfm25-jp-duelmasters-final/` (adapter_model.safetensors, tokenizer, config)
+4. Use finetuned model for `crawler/main.py parse-effects` via OpenAI-compatible server

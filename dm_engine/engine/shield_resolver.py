@@ -59,6 +59,19 @@ def mark_direct_attack_if_applicable(state: GameState) -> GameState:
         return s
     if s.players[ctx.defending_player].shield_count == 0 and ctx.shields_broken == 0:
         ctx.received_direct_attack = True
+        
+        # Fire ON_DIRECT_ATTACK trigger
+        from core.enums import TriggerEvent
+        from engine.trigger_registry import fire_trigger
+        attacker_result = s.find_creature_anywhere(ctx.attacker_uid)
+        if attacker_result:
+            _, attacker = attacker_result
+            fire_trigger(s, TriggerEvent.ON_DIRECT_ATTACK, {
+                "source_uid": attacker.uid,
+                "source_card_id": attacker.id,
+                "controller": ctx.attacker_player,
+                "defender_player": ctx.defending_player,
+            }, attacker.uid)
     return s
 
 

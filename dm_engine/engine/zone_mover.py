@@ -12,7 +12,7 @@ from typing import Optional
 from core.enums import ManaUsage, CardSubtype
 from core.state import GameState
 from core.zones import Creature, EvolutionStackEntry, GraveyardCard, HandCard, ManaCard, ShieldCard, HyperspatialCard, _new_uid
-from core.cards import is_twinpact, is_forbidden, get_other_face, is_hyper_mode, is_g_castle
+from core.cards import CardDefinition, is_twinpact, is_forbidden, get_other_face, is_hyper_mode, is_g_castle
 
 
 def creature_to_hyperspatial_card(creature: Creature) -> HyperspatialCard:
@@ -42,6 +42,17 @@ def move_hand_to_mana(state: GameState, player: int, card_uid: str) -> ManaCard:
     mana = ManaCard.from_charge(hand_card.definition)
     state.players[player].mana_zone.append(mana)
     state.players[player].has_charged_mana_this_turn = True
+    
+    # Fire ON_MANA_CHARGE trigger
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.ON_MANA_CHARGE, {
+        "source_uid": mana.uid,
+        "source_card_id": mana.id,
+        "controller": player,
+        "zone": "mana_zone",
+    }, mana.uid)
+    
     return mana
 
 
@@ -84,6 +95,8 @@ def move_hand_to_battle(
         # Rule 801.3: No summoning sickness on evolution.
         base.has_summoning_sickness = False
 
+        # Fire ON_ENTER_BATTLE_ZONE trigger for evolution
+        _fire_enter_battle_zone_trigger(state, base, player)
         return base
 
     creature = Creature(
@@ -98,7 +111,55 @@ def move_hand_to_battle(
     creature.apply_static_effects(state)
     # Phase 5A: Twinpact flip on summon
     flip_twinpact(creature)
+    
+    # Fire ON_SUMMON and ON_ENTER_BATTLE_BATTLE_ZONE triggers
+    _fire_enter_battle_zone_trigger(state, creature, player)
+    
     return creature
+
+
+def _fire_enter_battle_zone_trigger(state: GameState, creature, player: int) -> None:
+    """Fire ON_ENTER_BATTLE_ZONE and ON_SUMMON triggers for a creature entering BZ."""
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    
+    trigger_data = {
+        "source_uid": creature.uid,
+        "source_card_id": creature.id,
+        "controller": player,
+        "zone": "battle_zone",
+    }
+    
+    # Fire ON_ENTER_BATTLE_ZONE (always for entering BZ)
+    fire_trigger(state, TriggerEvent.ON_ENTER_BATTLE_ZONE, trigger_data, creature.uid)
+    
+    # Fire ON_SUMMON (for summons from hand/mana/etc., not for evolution)
+    # The caller can distinguish by checking if it was an evolution
+    # For now, we fire both - the condition system can filter
+    fire_trigger(state, TriggerEvent.ON_SUMMON, trigger_data, creature.uid)
+
+
+def _fire_leave_battle_zone_triggers(state: GameState, creature, player: int, reason: str) -> None:
+    """Fire ON_DESTROY and ON_LEAVE_BATTLE_ZONE triggers for a creature leaving BZ."""
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    
+    trigger_data = {
+        "source_uid": creature.uid,
+        "source_card_id": creature.id,
+        "controller": player,
+        "zone": "battle_zone",
+        "reason": reason,
+        "from_zone": "battle_zone",
+        "to_zone": "graveyard" if reason != "returned_to_hyperspatial" else "hyperspatial_zone",
+    }
+    
+    # Fire ON_DESTROY (for destruction)
+    if reason in ("destroyed", "battle", "sacrificed", "effect"):
+        fire_trigger(state, TriggerEvent.ON_DESTROY, trigger_data, creature.uid)
+    
+    # Fire ON_LEAVE_BATTLE_ZONE (always when leaving BZ)
+    fire_trigger(state, TriggerEvent.ON_LEAVE_BATTLE_ZONE, trigger_data, creature.uid)
 
 
 def move_zerom_to_battle(
@@ -312,6 +373,8 @@ def move_battle_to_graveyard(
     # Rules 805.4b / 807.4b — Psychic/Dragheart must return to Hyperspatial
     _HYPERSPATIAL_SUBTYPES = (CardSubtype.PSYCHIC, CardSubtype.PSYCHIC_SUPER, CardSubtype.DRAGHEART)
     if creature.definition.card_subtype in _HYPERSPATIAL_SUBTYPES:
+        # Fire leave triggers before moving to hyperspatial
+        _fire_leave_battle_zone_triggers(state, creature, player, reason)
         move_battle_to_hyperspatial(state, player, creature_uid, reason=reason)
         # Return a minimal GraveyardCard as a non-None sentinel so callers
         # that store the return value don't crash; the card is NOT in GY.
@@ -322,6 +385,9 @@ def move_battle_to_graveyard(
             died_on_turn=state.turn_number,
         )
 
+    # Fire leave triggers before removing from battle zone
+    _fire_leave_battle_zone_triggers(state, creature, player, reason)
+    
     creature.remove_static_effects(state)
     state.players[player].battle_zone.remove(creature)
     graveyard_card = GraveyardCard(
@@ -372,11 +438,14 @@ def move_evolution_whole_stack_to_graveyard(
         )
         p_state.graveyard.insert(0, graveyard_card)
 
+    # Fire leave triggers for the top card ONLY (per rule 109.2b)
+    _fire_leave_battle_zone_triggers(state, creature, player, reason)
+    
     # Now remove the creature from battle zone and move top card to graveyard
     creature.remove_static_effects(state)
     p_state.battle_zone.remove(creature)
 
-    # Top card goes to graveyard as a creature (will fire creature-leave triggers)
+    # Top card goes to graveyard as a creature
     graveyard_card = GraveyardCard(
         definition=creature.definition,
         uid=creature.uid,
@@ -531,6 +600,17 @@ def draw_card(state: GameState, player: int) -> Optional[HandCard]:
     hand_card = HandCard(definition=defn)
     p_state.hand.append(hand_card)
     p_state.has_drawn_this_turn = True
+    
+    # Fire ON_DRAW trigger
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.ON_DRAW, {
+        "source_uid": hand_card.uid,
+        "source_card_id": hand_card.id,
+        "controller": player,
+        "zone": "hand",
+    }, hand_card.uid)
+    
     return hand_card
 
 
@@ -539,6 +619,8 @@ def move_shield_to_standby(state: GameState, player: int, shield_index: int) -> 
 
     Checks the ReplacementEffectRegistry for any SHIELD_BREAK replacement
     before performing the shield break.
+    
+    Fires BEFORE_BREAK (rule 509.3) and ON_BREAK_SHIELD triggers.
     """
     # ── Replacement effect check (rule 609) ──────────────────────────────────
     from engine.replacement import EventType
@@ -551,8 +633,32 @@ def move_shield_to_standby(state: GameState, player: int, shield_index: int) -> 
     p_state = state.players[player]
     if shield_index < 0 or shield_index >= len(p_state.shield_zone):
         raise ValueError(f"Invalid shield index {shield_index}")
+    shield = p_state.shield_zone[shield_index]
+    
+    # Fire BEFORE_BREAK trigger (rule 509.3) - before shield is moved
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.BEFORE_BREAK, {
+        "source_uid": shield.uid,
+        "source_card_id": shield.id,
+        "controller": player,
+        "shield_index": shield_index,
+        "zone": "shield_zone",
+    }, shield.uid)
+    
+    # Remove shield from zone
     shield = p_state.shield_zone.pop(shield_index)
     shield.reveal()
+    
+    # Fire ON_BREAK_SHIELD trigger
+    fire_trigger(state, TriggerEvent.ON_BREAK_SHIELD, {
+        "source_uid": shield.uid,
+        "source_card_id": shield.id,
+        "controller": player,
+        "shield_index": shield_index,
+        "zone": "shield_zone",
+    }, shield.uid)
+    
     from engine.shield_break_window import open_shield_break_window
     open_shield_break_window(state, player, shield)
     return shield

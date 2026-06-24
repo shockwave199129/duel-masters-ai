@@ -5,7 +5,7 @@ engine/phase_controller.py — deterministic turn and phase advancement.
 from __future__ import annotations
 
 from core.actions import Action
-from core.enums import Phase
+from core.enums import Phase, TriggerEvent
 from core.state import GameState
 from engine.zone_mover import draw_card
 
@@ -48,6 +48,12 @@ def advance_phase(state: GameState, action: Action | None = None) -> GameState:
     elif phase == Phase.END_OF_TURN:
         _end_turn(s)
 
+    # Re-apply static effects for creatures with phase restrictions
+    # (Rule 110.3d: static abilities function continuously; some are phase-gated)
+    for player_idx in (0, 1):
+        for creature in s.players[player_idx].battle_zone:
+            creature.reapply_static_effects(s)
+
     return s
 
 
@@ -63,10 +69,24 @@ def _start_turn(state: GameState) -> None:
         if creature.entered_turn < state.turn_number:
             creature.clear_summoning_sickness()
 
+    # Fire START_OF_TURN triggers
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.START_OF_TURN, {
+        "controller": player,
+        "turn_number": state.turn_number,
+    }, None)
+
 
 def _end_turn(state: GameState) -> None:
     player = state.active_player
     p_state = state.players[player]
+    
+    # Fire END_OF_TURN triggers (before cleanup)
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.END_OF_TURN, {
+        "controller": player,
+        "turn_number": state.turn_number,
+    }, None)
     
     # ── Hand size limit enforcement (Rule 105) ──────────────────────────────
     # Players must have 10 or fewer cards in hand at end of turn

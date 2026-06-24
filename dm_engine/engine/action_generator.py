@@ -773,6 +773,13 @@ def _generate_attack_declarations(state: GameState) -> list[Action]:
     if not state.global_effects.can_attack_globally(player):
         return [pass_attack(player)]
 
+    # Check for creatures that MUST attack
+    must_attack_creatures = [
+        c for c in p_state.battle_zone
+        if c.can_attack() and c.temp_flags.get("must_attack", False)
+    ]
+    has_must_attack = len(must_attack_creatures) > 0
+
     for creature in p_state.battle_zone:
         if not creature.can_attack():
             continue
@@ -796,8 +803,10 @@ def _generate_attack_declarations(state: GameState) -> list[Action]:
                     target.uid, target.id
                 ))
 
-    # Always legal to stop attacking (rule 506.2: optional)
-    actions.append(pass_attack(player))
+    # If there are must-attack creatures that can attack, pass is NOT legal
+    # (Rule 506.1b: compelled creatures MUST attack)
+    if not has_must_attack:
+        actions.append(pass_attack(player))
     return actions
 
 
@@ -926,12 +935,25 @@ def _generate_block_actions(state: GameState) -> list[Action]:
         if not attacker.can_be_blocked():
             return [pass_block(defender)]
 
+    # Check for creatures that MUST block (and can legally block)
+    must_block_creatures = [
+        c for c in d_state.battle_zone
+        if not c.is_ignored and not c.is_tapped
+        and c.uid != ctx.target_uid
+        and c.is_blocker()
+        and c.temp_flags.get("must_block", False)
+    ]
+    has_must_block = len(must_block_creatures) > 0
+
     for creature in d_state.battle_zone:
         if creature.is_ignored:          # rule 116.2
             continue
         if creature.is_tapped:           # rule 507.1a example
             continue
         if creature.uid == ctx.target_uid:  # rule 507.1a: attacked creature can't self-block
+            continue
+        # CANNOT_BLOCK: this creature cannot be chosen as a blocker
+        if creature.temp_flags.get("cannot_block", False):
             continue
 
         # ── Blocker (rule 507.1a) ─────────────────────────────────────────
@@ -943,8 +965,9 @@ def _generate_block_actions(state: GameState) -> list[Action]:
         if creature.is_guardman() and ctx.is_attacking_creature:
             actions.append(declare_guardman(defender, creature.uid, creature.id))
 
-    # Always legal: don't block
-    actions.append(pass_block(defender))
+    # If there are must-block creatures that can legally block, pass is NOT legal
+    if not has_must_block:
+        actions.append(pass_block(defender))
     return actions
 
 

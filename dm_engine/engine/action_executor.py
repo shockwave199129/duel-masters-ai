@@ -131,6 +131,18 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
         spell_def = hand_card.definition if hand_card else None
         move_hand_to_graveyard(s, action.player, action.card_uid, reason="cast")
         s.record_action(action_type, action.player, action.card_id)
+        
+        # Fire ON_CAST trigger
+        if hand_card is not None:
+            from core.enums import TriggerEvent
+            from engine.trigger_registry import fire_trigger
+            fire_trigger(s, TriggerEvent.ON_CAST, {
+                "source_uid": hand_card.uid,
+                "source_card_id": hand_card.id,
+                "controller": action.player,
+                "zone": "graveyard",  # spell goes to graveyard after cast
+            }, hand_card.uid)
+        
         # Queue and resolve spell effects (rules 600-608)
         if spell_def is not None:
             spell_effects = [e for e in spell_def.effects
@@ -341,6 +353,17 @@ def _declare_attack(state: GameState, action: Action) -> None:
     attacker.tap()
     attacker.has_attacked_this_turn = True
 
+    # Fire ON_ATTACK trigger
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.ON_ATTACK, {
+        "source_uid": attacker.uid,
+        "source_card_id": attacker.id,
+        "controller": action.player,
+        "target_type": "player" if action.action_type == ActionType.ATTACK_PLAYER else "creature",
+        "target_uid": action.target_uid,
+    }, attacker.uid)
+
     target_type = "player" if action.action_type == ActionType.ATTACK_PLAYER else "creature"
     state.attack_context = AttackContext(
         attacker_uid=attacker.uid,
@@ -366,6 +389,16 @@ def _declare_block(state: GameState, action: Action) -> None:
     state.attack_context.block_was_declared = True
     state.turn_info.phase = Phase.BATTLE
     state.record_action(action.action_type, action.player, action.card_id, blocker.uid)
+
+    # Fire ON_BLOCK trigger
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.ON_BLOCK, {
+        "source_uid": blocker.uid,
+        "source_card_id": blocker.id,
+        "controller": action.player,
+        "attacker_uid": state.attack_context.attacker_uid,
+    }, blocker.uid)
 
 
 def _resolve_shield_trigger_choice(state: GameState, action: Action) -> None:

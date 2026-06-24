@@ -72,6 +72,12 @@ from scripts.cf_cookies import apply_cf_cookies, close_browser_context
 from scripts.repair_cards import repair_cards_from_raw_text
 from scripts.populate_card_rules import populate_card_rules
 
+# API modules (imported unconditionally to satisfy type checker)
+from scripts.api_client import db_upsert_set, make_api_session
+from scripts.api_set_page import crawl_set_page_api
+from scripts.api_scraper import scrape_card_url_api
+from scripts.api_sets import discover_sets
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
@@ -153,9 +159,6 @@ def stage_discover_sets(sm: StateManager, series: str, use_api: bool = False):
     logger.info("=" * 60)
 
     if use_api:
-        from scripts.api_client import make_api_session
-        from scripts.api_sets import discover_sets
-
         session = make_api_session()
         sets = discover_sets(session=session, series=series)
     else:
@@ -187,9 +190,6 @@ def stage_discover_cards(sm: StateManager, use_api: bool = False):
     logger.info("=" * 60)
 
     if use_api:
-        from scripts.api_client import db_upsert_set, make_api_session
-        from scripts.api_set_page import crawl_set_page_api
-
         session = make_api_session()
     else:
         session = _make_session()
@@ -273,9 +273,6 @@ def stage_scrape_cards(sm: StateManager, dsn: str, use_api: bool = False):
     logger.info("=" * 60)
 
     if use_api:
-        from scripts.api_client import make_api_session
-        from scripts.api_scraper import scrape_card_url_api
-
         session = make_api_session()
     else:
         session = _make_session()
