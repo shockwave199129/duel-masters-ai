@@ -211,6 +211,9 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
     elif action_type == ActionType.USE_SHIELD_TRIGGER:
         _resolve_shield_trigger_choice(s, action)
 
+    elif action_type == ActionType.SELECT_YES_NO:
+        _resolve_select_yes_no(s, action)
+
     elif action_type == ActionType.USE_G_STRIKE:
         _resolve_g_strike_choice(s, action)
 
@@ -499,6 +502,7 @@ def _resolve_s_back(state: GameState, action: Action) -> None:
             uid=shield.uid,
             died_from="s_back_discard",
             died_on_turn=state.turn_number,
+            treat_as_hand_discard=True,   # Rule 509.5c
         ),
     )
 
@@ -531,3 +535,14 @@ def _resolve_sabaki_z(state: GameState, action: Action) -> None:
         close_window_if_done(state)
 
     state.record_action(action.action_type, action.player, action.card_id, action.target_uid)
+
+
+def _resolve_select_yes_no(state: GameState, action: Action) -> None:
+    """Handle SELECT_YES_NO actions, including Silent Skill context."""
+    extra = dict(action.extra or ())
+    context = extra.get("context", "")
+    if context == "silent_skill" and action.choice:
+        # Player chose to keep this creature tapped for Silent Skill
+        creature = state.players[action.player].find_creature(action.card_uid or "")
+        if creature:
+            creature.temp_flags["silent_skill_skip_untap"] = True

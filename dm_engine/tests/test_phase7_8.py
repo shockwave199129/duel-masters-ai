@@ -277,31 +277,11 @@ def test_gneo_replacement_function_exists():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 8.1 — Hand size limit
+# 8.1 — Hand size limit (removed: Rule 105 no longer enforced by engine)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_hand_size_limit_enforcement():
-    """Hand > 10 cards triggers discard choice at end of turn."""
-    state = make_game_state()
-    # Add 12 cards to hand
-    for i in range(12):
-        card_def = make_card(100 + i, card_type=CardType.SPELL, cost=1)
-        state.players[0].hand.append(HandCard(definition=card_def, uid=f"h{i}"))
-    
-    check("Hand has 12 cards", len(state.players[0].hand) == 12)
-    
-    _end_turn(state)
-    
-    # Should have triggered a choice (hand still > 10)
-    check("Discard choice triggered", state.effect_stack.is_waiting_for_choice())
-    if state.effect_stack.awaited_choice:
-        check("Choice type is discard_down",
-              state.effect_stack.awaited_choice.choice_type == "discard_down")
-        check("Must discard 2 cards",
-              state.effect_stack.awaited_choice.min_choices == 2)
 
-
-def test_hand_size_10_or_less_no_discard():
+def test_hand_size_not_enforced():
     """Hand with ≤ 10 cards doesn't trigger discard."""
     state = make_game_state()
     for i in range(8):
@@ -564,8 +544,8 @@ if __name__ == "__main__":
     
     # 8.1
     print("\n--- 8.1: Hand size limit ---")
-    test_hand_size_limit_enforcement()
-    test_hand_size_10_or_less_no_discard()
+    test_hand_size_not_enforced()
+    test_hand_size_not_enforced()  # same test covers the ≤10 case
     
     # 8.2
     print("\n--- 8.2: Infinity edge cases ---")

@@ -241,11 +241,11 @@ Psychic / Dragheart flip mechanics (use these effect_action values):
                        others flip to lower face (rule 806.1b). Use effect_type "triggered".
 - "dragon_soul_evasion": Replacement effect for Dragheart Super Creature leaving the BZ;
                        player chooses one Cell to return to Hyperspatial (rule 808.1b).
-                       Set is_replacement=true.
+                       Set effect_type: "replacement" and is_replacement=true.
 - "psychic_release":   Replacement effect: Psychic Creature would leave BZ → flips to
-                       lower-cost face instead (rule 805.1b). Set is_replacement=true.
+                       lower-cost face instead (rule 805.1b). Set effect_type: "replacement" and is_replacement=true.
 - "dragon_evasion":    Replacement effect: Dragheart Creature would leave BZ → flips to
-                       Weapon/Fortress face instead (rule 807.1b). Set is_replacement=true.
+                       Weapon/Fortress face instead (rule 807.1b). Set effect_type: "replacement" and is_replacement=true.
 
 Additional effect_action guidelines:
 - "power_fix":          Set power to a specific computed value (rule 206.3). Use when a card says
@@ -335,7 +335,7 @@ Mandatory actions (new effect_action values):
 - "must_block":      Creature must block if able.
 - "cannot_block":    Creature cannot block.
 
-Use "GR_summon" when a card specifically GR Summons from the Ultra GR Zone (rule 701.30).
+Use "gr_summon" when a card specifically GR Summons from the Ultra GR Zone (rule 701.30).
 Use "summon_free" for generic "summon without paying cost" effects.
 
 Trigger event guidelines:
@@ -352,6 +352,15 @@ Trigger event guidelines:
 - "When attacking with 0 opponent shields" → trigger_event: "on_direct_attack" (rule 509)
 - Replacement effects (Release / Evasion) → trigger_event: "none" (they apply passively)
 
+IMPORTANT: S-Trigger vs triggered abilities on shield break
+  - S-TRIGGER (the keyword ability that lets a card be played for free from hand)
+    → effect_type: "keyword", effect_action: "none", active_in_zone: ["shield_zone"]
+    Do NOT set trigger_event for the S-Trigger keyword itself.
+    S-Trigger is a keyword ability, not a triggered ability.
+  - ABILITIES THAT TRIGGER WHEN A SHIELD IS BROKEN
+    (e.g., "When one of your shields is broken, draw a card")
+    → effect_type: "triggered", trigger_event: "on_shield_trigger"
+
 Psychic / Dragheart trigger events:
 - Awaken condition checks → trigger_event: "start_of_turn"
 - Dragsolution condition checks → trigger_event: "end_of_turn"
@@ -367,6 +376,20 @@ King Cell combine (rule 814):
 For unknown or complex effects use "none" for effect_action and lower confidence.
 For trigger_condition, effect_target, and effect_value, return a valid JSON string
 like "{\"amount\": 2}" or null. Do not return raw objects in those fields.
+
+effect_target canonical schema (always use this exact shape when applicable):
+{
+  "scope":          "self" | "opponent" | "both" | "any",   // whose side
+  "type":           "creature" | "spell" | "card" | "player",
+  "race":           "<race name, e.g. Dragon>" | null,
+  "civilization":   "<civ name, e.g. Fire>" | null,
+  "zone":           "battle_zone" | "hand" | "mana_zone" | "deck" | "graveyard" | null,
+  "power_lte":      <int> | null,   // power ≤ this value
+  "power_gte":      <int> | null,   // power ≥ this value
+  "count":          <int> | "all" | null,
+  "exclude_uid":    null            // reserved; always null in parsed output
+}
+Omit keys that are not applicable. Do not invent keys outside this schema.
 
 Targeting rules are important:
 - If text says "a creature" or similar unrestricted wording, include legal own

@@ -226,10 +226,13 @@ class PlayerState:
             creature.blocking_uid = None
 
     def untap_all(self) -> None:
-        """Untap all mana and creatures at start of turn."""
+        """Untap all mana and creatures at start of turn.
+        Rule 501.1a: skip creatures the player chose to keep tapped via Silent Skill."""
         for mana in self.mana_zone:
             mana.untap()
         for creature in self.battle_zone:
+            if creature.temp_flags.pop("silent_skill_skip_untap", False):
+                continue
             creature.untap()
 
     def clear_summoning_sickness(self) -> None:

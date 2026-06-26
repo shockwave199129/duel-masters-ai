@@ -88,26 +88,6 @@ def _end_turn(state: GameState) -> None:
         "turn_number": state.turn_number,
     }, None)
     
-    # ── Hand size limit enforcement (Rule 105) ──────────────────────────────
-    # Players must have 10 or fewer cards in hand at end of turn
-    MAX_HAND_SIZE = 10
-    if len(p_state.hand) > MAX_HAND_SIZE:
-        # Generate discard-down-to-10 choice actions
-        # The player must choose which cards to discard
-        num_to_discard = len(p_state.hand) - MAX_HAND_SIZE
-        from core.state import AwaitedChoice
-        state.effect_stack.set_choice(AwaitedChoice(
-            choice_type="discard_down",
-            player=player,
-            effect=None,
-            source_uid="",
-            valid_options=[card.uid for card in p_state.hand],
-            min_choices=num_to_discard,
-            max_choices=num_to_discard,
-            prompt=f"Discard down to {MAX_HAND_SIZE} cards",
-        ))
-        return  # Pause turn transition until discard is resolved
-    
     # ── Pending state cleanup (Rule 512.1) ──────────────────────────────────
     # Move any creatures in PENDING state to graveyard at end of turn
     pending_creatures = [c for c in p_state.battle_zone if c.temp_flags.get("_pending")]

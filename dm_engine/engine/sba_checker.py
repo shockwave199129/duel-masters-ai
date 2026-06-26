@@ -62,9 +62,6 @@ def _check_once(state: GameState) -> tuple[GameState, bool]:
     if _sba_smax_uniqueness(s):
         any_fired = True
 
-    if _sba_star_evolution_uniqueness(s):
-        any_fired = True
-
     if _sba_dream_rare_uniqueness(s):
         any_fired = True
 
@@ -359,10 +356,10 @@ def _sba_direct_attack(state: GameState) -> bool:
         return False
 
     defender = ctx.defending_player
-    if state.players[defender].shield_count == 0 and ctx.shields_broken >= 0:
+    if state.effective_shield_count(defender) == 0 and ctx.shields_broken >= 0:
         # Check if this attack actually reached the player
         if state.current_phase in (Phase.DIRECT_ATTACK, Phase.END_OF_ATTACK):
-            if state.players[defender].shield_count == 0:
+            if state.effective_shield_count(defender) == 0:
                 winner = 1 - defender
                 state.result = (
                     GameResult.PLAYER_0_WINS if winner == 0
@@ -825,55 +822,6 @@ def _destroy_creature(
     )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Star Evolution uniqueness (rule 813)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _sba_star_evolution_uniqueness(state: GameState) -> bool:
-    """
-    Rule 813: Star Evolution creatures must be unique in the Battle Zone.
-    Only one of each Star Evolution card_id per player is allowed.
-
-    If duplicates are found, keep the one that entered most recently
-    (highest entered_turn), send extras to the graveyard.
-    """
-    from core.cards import is_star_evolution
-
-    fired = False
-    for player_idx in range(2):
-        star_evos = [
-            c for c in state.players[player_idx].battle_zone
-            if is_star_evolution(c)
-        ]
-
-        # Group by card_id
-        by_id: dict[int, list] = {}
-        for creature in star_evos:
-            cid = creature.definition.id
-            by_id.setdefault(cid, []).append(creature)
-
-        for cid, creatures in by_id.items():
-            if len(creatures) <= 1:
-                continue
-            # Keep the one with the highest entered_turn (most recent)
-            creatures.sort(key=lambda c: c.entered_turn, reverse=True)
-            for creature in creatures[1:]:
-                state.players[player_idx].battle_zone.remove(creature)
-                state.global_effects.remove_by_source(creature.uid)
-                state.players[player_idx].graveyard.insert(
-                    0,
-                    GraveyardCard(
-                        definition=creature.definition,
-                        uid=creature.uid,
-                        died_from="sba_star_evo_duplicate",
-                        died_on_turn=state.turn_number,
-                    ),
-                )
-                fired = True
-
-    return fired
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Dream Rare uniqueness (rule 817)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -928,10 +876,11 @@ def _sba_duel_mate_cleanup(state: GameState) -> bool:
     """
     Rule 820: Duel Mates that are in the Battle Zone but not properly
     summoned should be moved to the Hyperspatial Zone.
+    Established Duel Mates (those that survived a full turn cycle) stay.
 
-    Checks for creatures whose definition has card_subtype == DUEL_MATE
-    and that have has_summoning_sickness == False (not properly summoned).
-    Move them to the Hyperspatial Zone as HyperspatialCard objects.
+    A Duel Mate is properly summoned if it came via the Duel Mate summon
+    action path (temp_flags["properly_summoned_as_duel_mate"]).
+    Otherwise, evict freshly-arrived Duel Mates that still have summoning sickness.
     """
     from core.cards import is_duel_mate
 
@@ -943,9 +892,10 @@ def _sba_duel_mate_cleanup(state: GameState) -> bool:
         ]
 
         for creature in duel_mates:
-            # If this Duel Mate wasn't properly summoned (no summoning sickness
-            # but flagged), move to hyperspatial
-            if not creature.has_summoning_sickness:
+            # Evict Duel Mates that still have summoning sickness AND were not
+            # properly summoned. Established Duel Mates (no sickness) are fine.
+            properly_summoned = creature.temp_flags.get("properly_summoned_as_duel_mate", False)
+            if creature.has_summoning_sickness and not properly_summoned:
                 creature.remove_static_effects(state)
                 state.players[player_idx].battle_zone.remove(creature)
                 state.global_effects.remove_by_source(creature.uid)

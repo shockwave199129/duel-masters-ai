@@ -46,7 +46,7 @@ from typing import Optional
 
 from core.enums import (
     Phase, ActionType, Civilization, Keyword,
-    CardType, CardSubtype, ManaUsage, EffectAction,
+    CardType, CardSubtype, ManaUsage, EffectAction, EffectType,
 )
 from core.state import GameState
 from core.zones import Creature, ManaCard
@@ -224,8 +224,22 @@ def _generate_start_of_turn_actions(state: GameState) -> list[Action]:
                 and creature.is_tapped
                 and not creature.is_ignored):
             # Offer the choice: activate Silent Skill (don't untap)
-            actions.append(select_yes_no(player, True, creature.uid))
-            actions.append(select_yes_no(player, False, creature.uid))
+            # Build Action directly to pass context for the executor
+            from core.actions import Action
+            actions.append(Action(
+                player=player,
+                action_type=ActionType.SELECT_YES_NO,
+                choice=True,  # keep tapped
+                card_uid=creature.uid,
+                extra=(("source_uid", creature.uid), ("context", "silent_skill")),
+            ))
+            actions.append(Action(
+                player=player,
+                action_type=ActionType.SELECT_YES_NO,
+                choice=False,  # allow untap
+                card_uid=creature.uid,
+                extra=(("source_uid", creature.uid), ("context", "silent_skill")),
+            ))
 
     # Always legal: proceed with normal untap
     actions.append(pass_action(player, "start_of_turn"))
@@ -558,7 +572,7 @@ def _actions_for_hand_card(
     # ── Castle (rule 304) ──────────────────────────────────────────────────
     elif card_type == CardType.CASTLE:
         # Must have at least one shield to fortify
-        if state.players[player].shield_count == 0:
+        if state.effective_shield_count(player) == 0:
             return []
         effective_cost = _compute_effective_cost(defn, state, player)
         combos = _get_mana_combinations(
@@ -999,13 +1013,13 @@ def _generate_direct_attack_actions(state: GameState) -> list[Action]:
 
     # No shields → direct attack → state-based action handles the win
     # Just pass to let SBA checker run
-    if d_state.shield_count == 0:
+    if state.effective_shield_count(defender) == 0:
         return [pass_action(player, "direct_attack")]
 
     # Player must choose which shield(s) to break
     # We return one SELECT_ATTACK_ORDER action per available shield position
     actions: list[Action] = []
-    for i in range(d_state.shield_count):
+    for i in range(state.effective_shield_count(defender)):
         from core.actions import select_shield_to_break
         actions.append(select_shield_to_break(player, shield_index=i))
 
@@ -1521,12 +1535,34 @@ def _compute_effective_cost(
 
     # ── Sympathy (cost reduced by number of matching creatures) ───────────
     if defn.has_keyword(Keyword.SYMPATHY):
-        # Simplified: count our own creatures in battle zone with matching race
-        # Full implementation reads sympathy value from card_effects row
-        for race in defn.races:
-            for creature in state.players[player].battle_zone:
-                if race in creature.races:
-                    modification -= 1
+        # Rule 112.1a: cost reduced by number of creatures of matching race.
+        # Reads the sympathy race from effect_target on COST_REDUCE effects.
+        import json
+        found_sympathy = False
+        for effect in defn.effects:
+            if effect.effect_action != EffectAction.COST_REDUCE:
+                continue
+            if effect.trigger_event is not None:
+                continue  # only static cost reductions apply here
+            try:
+                target = json.loads(effect.effect_target or "{}")
+            except (ValueError, TypeError):
+                continue
+            sympathy_race = target.get("race")
+            if sympathy_race is None:
+                continue
+            found_sympathy = True
+            count = sum(
+                1 for c in state.players[player].battle_zone
+                if sympathy_race.lower() in [r.lower() for r in c.definition.races]
+            )
+            modification -= count
+        # Fallback: if no effect matches, use old race-iteration heuristic
+        if not found_sympathy:
+            for race in defn.races:
+                for creature in state.players[player].battle_zone:
+                    if race in creature.races:
+                        modification -= 1
 
     # ── Global cost modifiers from active card effects ───────────────────
     global_mod = state.global_effects.get_cost_modifiers(player, defn.id)
@@ -1548,16 +1584,52 @@ def _g_zero_condition_met(
 ) -> bool:
     """
     Rule 112.3e: G-Zero allows free summon if a specified condition is met.
-    The exact condition is card-specific and stored in card_effects.
-
-    Simplified check: count creatures of the same race in the battle zone.
-    Full implementation reads the G-Zero condition from the card_effects row.
+    Reads the condition from card_effects (effect_action == COST_MOD with
+    a trigger_condition). Falls back to False (conservative) when no
+    condition is parseable.
     """
-    # Simplified: if player has ≥ 1 creature of the same race, condition met.
-    for race in defn.races:
-        for creature in state.players[player].battle_zone:
-            if race in creature.races and not creature.is_ignored:
-                return True
+    for effect in defn.effects:
+        if effect.effect_type != EffectType.COST_MOD:
+            continue
+        if not effect.trigger_condition:
+            continue
+        import json
+        try:
+            condition = json.loads(effect.trigger_condition)
+        except (ValueError, TypeError):
+            continue
+        return _evaluate_condition(condition, state, player)
+    return False
+
+
+def _evaluate_condition(
+    condition: dict,
+    state: GameState,
+    player: int,
+) -> bool:
+    """Evaluate a parsed G-Zero trigger condition against the current state."""
+    cond_type = condition.get("type", "")
+    if cond_type == "own_creature_count_gte":
+        threshold = condition.get("value", 1)
+        return len(state.players[player].battle_zone) >= threshold
+    elif cond_type == "own_shield_count_lte":
+        threshold = condition.get("value", 0)
+        return state.effective_shield_count(player) <= threshold
+    elif cond_type == "opponent_shield_count_lte":
+        threshold = condition.get("value", 0)
+        return state.effective_shield_count(1 - player) <= threshold
+    elif cond_type == "own_mana_count_gte":
+        threshold = condition.get("value", 1)
+        return state.players[player].mana_count >= threshold
+    elif cond_type == "own_creature_race":
+        target_race = condition.get("race", "")
+        if not target_race:
+            return False
+        return any(
+            target_race.lower() in [r.lower() for r in c.definition.races]
+            for c in state.players[player].battle_zone
+        )
+    # Unknown condition type — safe fallback
     return False
 
 

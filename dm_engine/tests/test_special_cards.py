@@ -362,44 +362,6 @@ print("─" * 60)
 # 6a) Two Star Evolution creatures with same card_id → one sent to graveyard
 star_card = card(600, "Star Evolver", power=5000)
 star_creature_a = make_creature(star_card, controller=0, entered_turn=2)
-star_creature_a.temp_flags["_is_star_evolution"] = True
-star_creature_b = make_creature(star_card, controller=0, entered_turn=3)
-star_creature_b.temp_flags["_is_star_evolution"] = True
-state_6a = make_state(p0_battle=[star_creature_a, star_creature_b])
-check_state_based_actions(state_6a)
-# After the first SBA check, verify by running directly
-state_6a_direct = make_state(p0_battle=[star_creature_a, star_creature_b])
-from engine.sba_checker import _sba_star_evolution_uniqueness
-_sba_star_evolution_uniqueness(state_6a_direct)
-remaining_ids = [c.definition.id for c in state_6a_direct.players[0].battle_zone]
-gy_ids = [g.definition.id for g in state_6a_direct.players[0].graveyard]
-check("6a: Two same-id Star Evos → one sent to graveyard",
-      len(remaining_ids) == 1 and 600 in gy_ids,
-      f"battle={remaining_ids}, gy={gy_ids}")
-
-# 6b) Two Star Evolution creatures with different card_id → both stay
-star_card_2 = card(601, "Star Evolver II", power=4000)
-star_creature_c = make_creature(star_card_2, controller=0, entered_turn=3)
-star_creature_c.temp_flags["_is_star_evolution"] = True
-state_6b = make_state(p0_battle=[
-    make_creature(star_card, controller=0, entered_turn=2, temp_flags={"_is_star_evolution": True}),
-    star_creature_c,
-])
-_sba_star_evolution_uniqueness(state_6b)
-count_6b = len(state_6b.players[0].battle_zone)
-check("6b: Two different-id Star Evos → both stay",
-      count_6b == 2, f"battle_zone has {count_6b}")
-
-# 6c) Non-star-evolution creatures are unaffected
-normal_creature_a = make_creature(card(602, "Normal A", power=2000), controller=0)
-normal_creature_b = make_creature(card(602, "Normal A", power=2000), controller=0)
-state_6c = make_state(p0_battle=[normal_creature_a, normal_creature_b])
-_sba_star_evolution_uniqueness(state_6c)
-count_6c = len(state_6c.players[0].battle_zone)
-check("6c: Non-star-evolution creatures unaffected",
-      count_6c == 2, f"battle_zone has {count_6c}")
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 7: Dream Rare Uniqueness SBA (Rule 817)
 # ─────────────────────────────────────────────────────────────────────────────

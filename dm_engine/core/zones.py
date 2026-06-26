@@ -918,6 +918,7 @@ class GraveyardCard:
     uid:             str = field(default_factory=_new_uid)
     died_from:       str = "unknown"   # "battle" | "spell" | "effect" | "discarded"
     died_on_turn:    int = 0
+    treat_as_hand_discard: bool = False  # Rule 509.5c: S-Back discards count as hand discard
 
     @property
     def id(self) -> int:

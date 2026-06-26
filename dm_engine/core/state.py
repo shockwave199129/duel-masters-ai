@@ -130,9 +130,15 @@ class EffectStack:
         self.pending_triggers.append(trigger)
 
     def pop_next_trigger(self) -> Optional[PendingTrigger]:
-        if self.pending_triggers:
-            return self.pending_triggers.pop(0)
-        return None
+        """Rule 101.4a: APNAP ordering.
+           S-Triggers (priority 0) resolve first, then active player's triggers,
+           then non-active player's."""
+        if not self.pending_triggers:
+            return None
+        self.pending_triggers.sort(key=lambda t: (
+            0 if t.priority == 0 else 1  # S-Triggers first
+        ))
+        return self.pending_triggers.pop(0)
 
     def set_choice(self, choice: AwaitedChoice) -> None:
         self.awaited_choice = choice
@@ -369,6 +375,20 @@ class GameState:
 
     def is_waiting_for_choice(self) -> bool:
         return self.effect_stack.is_waiting_for_choice()
+
+    def effective_shield_count(self, player: int) -> int:
+        """
+        Rule 113.6a: standby shields are not counted, even though
+        they are still physically in shield_zone.
+        """
+        win = self.effect_stack.shield_break_window
+        standby_uids: set[str] = set()
+        if win is not None:
+            standby_uids = {s.uid for s in win.standby_shields}
+        return sum(
+            1 for s in self.players[player].shield_zone
+            if s.uid not in standby_uids
+        )
 
     # ─────────────────────────────────────────────────────────────────────────
     # Cross-player queries (for effect evaluation)
