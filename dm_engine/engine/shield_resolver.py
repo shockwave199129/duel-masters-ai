@@ -39,7 +39,14 @@ def resolve_shield_break_choice(state: GameState, first_shield_index: int) -> Ga
         return s
     _, attacker = attacker_result
 
-    break_count = min(attacker.shields_broken_on_attack(), d_state.shield_count)
+    # Rule 509.2c: check for multi-breaker player choice
+    break_mode = action.get_extra().get("break_mode")
+    if break_mode == "triple":
+        break_count = min(3, d_state.shield_count)
+    elif break_mode == "double":
+        break_count = min(2, d_state.shield_count)
+    else:
+        break_count = min(attacker.shields_broken_on_attack(), d_state.shield_count)
     indices = _shield_indices_for_batch(d_state.shield_count, first_shield_index, break_count)
 
     # Pop highest indices first so earlier positions stay stable.

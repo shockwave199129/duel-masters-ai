@@ -1016,12 +1016,38 @@ def _generate_direct_attack_actions(state: GameState) -> list[Action]:
     if state.effective_shield_count(defender) == 0:
         return [pass_action(player, "direct_attack")]
 
-    # Player must choose which shield(s) to break
-    # We return one SELECT_ATTACK_ORDER action per available shield position
+    # Check for simultaneous T+W Breaker (Rule 509.2c)
+    attacker_result = state.find_creature_anywhere(ctx.attacker_uid)
+    has_triple = False
+    has_double = False
+    if attacker_result is not None:
+        _, attacker = attacker_result
+        has_triple = attacker.has_keyword(Keyword.TRIPLE_BREAKER)
+        has_double = attacker.has_keyword(Keyword.DOUBLE_BREAKER)
+
     actions: list[Action] = []
-    for i in range(state.effective_shield_count(defender)):
-        from core.actions import select_shield_to_break
-        actions.append(select_shield_to_break(player, shield_index=i))
+    if has_triple and has_double:
+        # Rule 509.2c: player MUST choose which breaker to use.
+        # Single-break not offered. Generate paired choices for each shield.
+        from core.actions import Action as _Action
+        for i in range(state.effective_shield_count(defender)):
+            actions.append(_Action(
+                player=player,
+                action_type=ActionType.SELECT_ATTACK_ORDER,
+                shield_index=i,
+                extra=(("break_mode", "triple"),),
+            ))
+            actions.append(_Action(
+                player=player,
+                action_type=ActionType.SELECT_ATTACK_ORDER,
+                shield_index=i,
+                extra=(("break_mode", "double"),),
+            ))
+    else:
+        # Normal path — one SELECT_ATTACK_ORDER per shield position
+        for i in range(state.effective_shield_count(defender)):
+            from core.actions import select_shield_to_break
+            actions.append(select_shield_to_break(player, shield_index=i))
 
     return actions
 

@@ -201,6 +201,7 @@ def _effect_active_in_phase(effect, phase) -> bool:
 def _queue_trigger(state, rt: RegisteredTrigger, trigger_data: dict) -> None:
     """Create and queue a PendingTrigger for resolution."""
     from engine.trigger_resolver import PendingTrigger
+    from core.enums import Keyword
     
     # Build trigger data with source info
     full_trigger_data = {
@@ -214,11 +215,26 @@ def _queue_trigger(state, rt: RegisteredTrigger, trigger_data: dict) -> None:
     source_card = _find_card_by_uid(state, rt.source_uid)
     controller = source_card.controller if source_card else 0
     
+    # Determine APNAP priority (Rule 101.4a):
+    # 0 = S-Trigger (shield trigger keyword — always first)
+    # 1 = active player's triggers
+    # 2 = non-active player's triggers
+    apnap_priority = -1  # unassigned legacy default
+    if source_card is not None:
+        defn = getattr(source_card, "definition", None)
+        if defn is not None and Keyword.SHIELD_TRIGGER in defn.keywords:
+            apnap_priority = 0
+        elif controller == state.active_player:
+            apnap_priority = 1
+        else:
+            apnap_priority = 2
+    
     pending = PendingTrigger(
         effect=rt.effect,
         source_uid=rt.source_uid,
         source_card_id=rt.source_card_id,
         controller=controller,
         trigger_data=full_trigger_data,
+        priority=apnap_priority,
     )
     state.effect_stack.add_pending_trigger(pending)

@@ -130,14 +130,16 @@ class EffectStack:
         self.pending_triggers.append(trigger)
 
     def pop_next_trigger(self) -> Optional[PendingTrigger]:
-        """Rule 101.4a: APNAP ordering.
-           S-Triggers (priority 0) resolve first, then active player's triggers,
-           then non-active player's."""
+        """
+        Rule 101.4a: APNAP ordering.
+        priority 0 = S-Trigger (first)
+        priority 1 = active player's standby triggers
+        priority 2 = non-active player's standby triggers
+        priority -1 = unassigned legacy fallback (treated as last)
+        """
         if not self.pending_triggers:
             return None
-        self.pending_triggers.sort(key=lambda t: (
-            0 if t.priority == 0 else 1  # S-Triggers first
-        ))
+        self.pending_triggers.sort(key=lambda t: t.priority if t.priority >= 0 else 999)
         return self.pending_triggers.pop(0)
 
     def set_choice(self, choice: AwaitedChoice) -> None:
