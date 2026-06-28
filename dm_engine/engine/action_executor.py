@@ -5,7 +5,7 @@ engine/action_executor.py — apply one Action to a copied GameState.
 from __future__ import annotations
 
 from core.actions import Action, actions_equal
-from core.enums import ActionType, EffectType, Phase
+from core.enums import ActionType, EffectType, Keyword, Phase
 from core.state import AttackContext, GameState, PendingTrigger
 from engine.trigger_resolver import resolve_pending_triggers
 from engine.action_generator import get_legal_actions
@@ -18,6 +18,7 @@ from engine.zone_mover import (
     cross_gear_to_creature,
     fortify_shield_with_castle,
     move_hand_to_battle,
+    move_hand_to_field,
     move_hand_to_graveyard,
     move_hand_to_mana,
     move_standby_shield_to_hand,
@@ -160,7 +161,6 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
 
     elif action_type in (
         ActionType.GENERATE_CROSS_GEAR,
-        ActionType.DEPLOY_FIELD,
         ActionType.EXECUTE_TAMASEED,
     ):
         _require_card_uid(action)
@@ -168,6 +168,12 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
         battle_card = move_hand_to_battle(s, action.player, action.card_uid)
         battle_card.has_summoning_sickness = False
         s.record_action(action_type, action.player, action.card_id, battle_card.uid)
+
+    elif action_type == ActionType.DEPLOY_FIELD:
+        _require_card_uid(action)
+        tap_mana_for_payment(s, action.player, action.mana_used)
+        field_creature = move_hand_to_field(s, action.player, action.card_uid)
+        s.record_action(action_type, action.player, action.card_id, field_creature.uid)
 
     elif action_type == ActionType.CROSS_GEAR:
         _require_card_uid(action)
@@ -233,7 +239,7 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
     elif action_type == ActionType.SELECT_ATTACK_ORDER:
         if action.shield_index is None:
             raise ValueError("SELECT_ATTACK_ORDER requires shield_index")
-        return resolve_shield_break_choice(s, action.shield_index)
+        return resolve_shield_break_choice(s, action.shield_index, action=action)
 
     elif action_type == ActionType.USE_NINJA_STRIKE:
         _require_card_uid(action)
@@ -295,7 +301,52 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
 
 
 def _is_legal_action(state: GameState, action: Action, db=None) -> bool:
-    return any(actions_equal(action, legal) for legal in get_legal_actions(state, db))
+    """
+    Check if an action is legal in the current state.
+    
+    Validates against get_legal_actions, plus additional mandatory action checks:
+    - Rule 506.1b: pass_attack is illegal if any must_attack creature can still attack
+    - Rule 507.1b: pass_block is illegal if any must_block creature hasn't been chosen
+    """
+    # First check: is action in legal_actions list?
+    legal_actions = get_legal_actions(state, db)
+    if not any(actions_equal(action, legal) for legal in legal_actions):
+        return False
+    
+    # Second check: mandatory action enforcement
+    from core.enums import ActionType, Phase
+    
+    # Rule 506.1b: cannot pass attack if must_attack creatures still can attack
+    if action.action_type == ActionType.PASS:
+        step = action.get_extra().get("step")
+        if step == "attack" and state.current_phase == Phase.ATTACK:
+            player = state.active_player
+            p_state = state.players[player]
+            must_attack_creatures = [
+                c for c in p_state.battle_zone
+                if c.can_attack() and c.temp_flags.get("must_attack", False)
+            ]
+            if must_attack_creatures:
+                return False  # Must attack with one of these creatures first
+    
+    # Rule 507.1b: cannot pass block if must_block creatures haven't all declared
+    if action.action_type == ActionType.PASS:
+        step = action.get_extra().get("step")
+        if step == "block" and state.current_phase == Phase.BLOCK_DECLARE:
+            if state.attack_context:
+                defender = state.attack_context.defending_player
+                d_state = state.players[defender]
+                must_block_creatures = [
+                    c for c in d_state.battle_zone
+                    if not c.is_ignored and not c.is_tapped
+                    and c.uid != state.attack_context.target_uid
+                    and c.is_blocker()
+                    and c.temp_flags.get("must_block", False)
+                ]
+                if must_block_creatures:
+                    return False  # Must declare block with all compelled creatures first
+    
+    return True
 
 
 def _require_card_uid(action: Action) -> None:
@@ -362,6 +413,10 @@ def _declare_attack(state: GameState, action: Action) -> None:
         raise ValueError("Attacking creature not found")
     attacker.tap()
     attacker.has_attacked_this_turn = True
+
+    # POWER_ATTACKER: set flag so compute_power() adds the bonus
+    if attacker.has_keyword(Keyword.POWER_ATTACKER):
+        attacker.temp_flags["power_attacker_active"] = True
 
     # Fire ON_ATTACK trigger
     from core.enums import TriggerEvent

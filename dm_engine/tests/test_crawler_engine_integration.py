@@ -80,6 +80,7 @@ def test_effect_action_dispatch():
         "WIN_CONDITION": "_do_win_by_effect",
         "LOSE_CONDITION": "_do_lose_by_effect",
         "ZEROM_FLIP": "_do_zerom_ritual",
+        "POWER_ATTACKER": "power_attacker_active",
     }
 
     missing_handlers = []

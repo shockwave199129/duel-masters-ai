@@ -106,8 +106,24 @@ def _do_destroy(state: GameState, controller: int, trigger: PendingTrigger) -> N
     Rule 606.2: If an effect targets multiple creatures and some targets
     become invalid, the effect still resolves on all remaining valid targets.
     "Do everything you can" (Rule 101.3).
+    
+    Rule (TODO 11): Protection prevents destruction by effects from specific
+    civilizations or races. Check protection before destroying.
     """
     data = _trigger_data(trigger)
+    
+    # Get source card info for protection checks
+    source_uid = trigger.source_uid
+    source_card_id = trigger.source_card_id
+    effect_source_civ = None
+    effect_source_race = None
+    
+    # Try to determine source civilization/race from source card
+    source_creature = state.find_creature_anywhere(source_uid)
+    if source_creature:
+        _, src = source_creature
+        effect_source_civ = list(src.definition.civilizations)[0] if src.definition.civilizations else None
+        effect_source_race = list(src.definition.races)[0] if src.definition.races else None
     
     # Single target (backward compatibility)
     target_uid = data.get("target_uid")
@@ -118,6 +134,9 @@ def _do_destroy(state: GameState, controller: int, trigger: PendingTrigger) -> N
         player_idx, creature = found
         if not creature.can_be_destroyed():
             return
+        # Check protection (TODO 11): if protected from this effect source, skip
+        if creature.is_protected_from(effect_source_civ, effect_source_race):
+            return  # Rule 606.2: target became invalid, skip it
         move_battle_to_graveyard(state, player_idx, creature.uid, reason="effect")
         return
     
@@ -131,6 +150,9 @@ def _do_destroy(state: GameState, controller: int, trigger: PendingTrigger) -> N
         player_idx, creature = found
         if not creature.can_be_destroyed():
             continue  # Skip creatures that can't be destroyed
+        # Check protection (TODO 11)
+        if creature.is_protected_from(effect_source_civ, effect_source_race):
+            continue  # Skip protected creatures
         move_battle_to_graveyard(state, player_idx, creature.uid, reason="effect")
         destroyed_any = True
     

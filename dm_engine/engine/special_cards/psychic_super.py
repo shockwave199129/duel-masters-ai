@@ -2,6 +2,7 @@
 from __future__ import annotations
 from core.state import GameState
 from core.zones import Creature, EvolutionStackEntry, HandCard
+from engine.zone_mover import creature_to_hyperspatial_card
 
 
 def link_release_psychic_super(
@@ -63,6 +64,7 @@ def link_release_psychic_super(
     surviving: list[Creature] = []
     for cell in remaining_cells:
         # Flip to lower-cost face (face=0), inherit super's tapped/effect state (rule 806.2)
+        cell.remove_static_effects(state)
         cell.face = 0
         cell.is_tapped = was_tapped
         cell.has_summoning_sickness = False  # already was in BZ this turn
@@ -70,6 +72,8 @@ def link_release_psychic_super(
         cell.linked_cells.clear()
         # Inherit power modifiers from the Super Creature
         cell.power_modifiers = [m for m in inherited_mods]
+        # Re-apply static effects from the lower face
+        cell.apply_static_effects(state)
         p_state.battle_zone.append(cell)
         surviving.append(cell)
 

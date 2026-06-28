@@ -10,7 +10,7 @@ from engine.sba_checker import check_state_based_actions
 from engine.zone_mover import move_shield_to_standby
 
 
-def resolve_shield_break_choice(state: GameState, first_shield_index: int) -> GameState:
+def resolve_shield_break_choice(state: GameState, first_shield_index: int, action=None) -> GameState:
     """
     Break the attacker's shield batch.
 
@@ -40,7 +40,9 @@ def resolve_shield_break_choice(state: GameState, first_shield_index: int) -> Ga
     _, attacker = attacker_result
 
     # Rule 509.2c: check for multi-breaker player choice
-    break_mode = action.get_extra().get("break_mode")
+    break_mode = None
+    if action is not None:
+        break_mode = action.get_extra().get("break_mode")
     if break_mode == "triple":
         break_count = min(3, d_state.shield_count)
     elif break_mode == "double":

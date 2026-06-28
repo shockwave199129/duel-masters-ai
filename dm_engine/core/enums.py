@@ -142,7 +142,7 @@ class Keyword(Enum):
     # ── Defense ───────────────────────────────────────────────────────────────
     BLOCKER                 = "blocker"             # rule 701.12 — intercepts attacks
     GUARDMAN                = "guardman"            # must block if conditions met
-    SLAYER                  = "slayer"              # destroys anything it battles
+    SLAYER                  = "slayer"              # OCG: when this creature loses a battle, the other creature is also destroyed
 
     # ── Free execution abilities (rule 112.3) ─────────────────────────────────
     SHIELD_TRIGGER          = "shield_trigger"      # rule 112.3a — cast for free from broken shield
@@ -287,6 +287,11 @@ class TriggerEvent(Enum):
     ON_WIN_BATTLE         = "on_win_battle"
     ON_DIRECT_ATTACK      = "on_direct_attack"   # rule 509 — attacking with 0 shields
     BEFORE_BREAK          = "before_break"        # rule 509.3 — before each shield break
+    ON_AWAKEN             = "on_awaken"            # rule 805.1a — Psychic flip trigger
+    ON_DRAGSOLVE          = "on_dragsolve"         # rule 807.1a — Dragheart Weapon→Creature
+    ON_TWINPACT_FLIP      = "on_twinpact_flip"     # Twinpact face change on summon
+    ON_HYPER_RELEASE      = "on_hyper_release"     # rule 816 — Hyper Mode release
+    ON_ZEROM_FLIP         = "on_zerom_flip"        # rule 812 — Zerom ritual→creature
     NONE                  = "none"
 
 
@@ -347,7 +352,8 @@ class EffectAction(Enum):
     WIN_CONDITION       = "win_condition"       # Win the game by card effect
     LOSE_CONDITION      = "lose_condition"      # Lose the game by card effect
     ZEROM_FLIP          = "zerom_flip"          # flip to creature side
-    # ── Zone operations (Tier 3 / TODO 10) ───────────────────────────────────────
+    POWER_ATTACKER      = "power_attacker"      # +N power when attacking
+    # ── Zone operations ──────────────────────────────────────────────────────────
     EVOLVE              = "evolve"              # rule 701.15 / 801 — Evolution Creature on base
     CROSS_GEAR          = "cross_gear"          # rule 701.17 / 303 — attach Cross Gear
     GOD_LINK            = "god_link"            # rule 701.18 / 804 — link God cards
@@ -356,13 +362,13 @@ class EffectAction(Enum):
     SWAP_ZONES          = "swap_zones"          # rule 701.26 — swap card zones (REVOLUTION_CHANGE)
     TURN_UPSIDE_DOWN    = "turn_upside_down"    # rule 701.28 — flip Field upside down
     FORBIDDEN_EXPLOSION = "forbidden_explosion" # rule 701.29 — flip Final Forbidden Field
-    # ── Defensive / Offensive (Tier 3 / TODO 11) ─────────────────────────────────
+    # ── Defensive / Offensive ────────────────────────────────────────────────────
     PROTECTION          = "protection"          # cannot be targeted/destroyed by [civ/race] effects
     GAIN_CONTROL        = "gain_control"        # take control of opponent's creature
-    # ── Field state (Tier 3 / TODO 12) ───────────────────────────────────────────
+    # ── Field state ──────────────────────────────────────────────────────────────
     ZEROM_BIRTH         = "zerom_birth"         # rule 701.31 — flip Ritual/Nebula of Zerom to creature
     SHIELDIFY           = "shieldify"           # rule 701.32 — turn a card into a shield
-    # ── Mandatory actions (Tier 3 / TODO 13) ─────────────────────────────────────
+    # ── Mandatory actions ────────────────────────────────────────────────────────
     MUST_ATTACK         = "must_attack"         # creature must attack if able
     MUST_BLOCK          = "must_block"          # creature must block if able
     CANNOT_BLOCK        = "cannot_block"        # creature cannot block

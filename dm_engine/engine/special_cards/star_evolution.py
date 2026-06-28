@@ -4,6 +4,11 @@ from core.state import GameState
 from core.zones import Creature, EvolutionStackEntry, HandCard
 
 
+def is_star_evolution(definition) -> bool:
+    """Check if a card definition is a Star Evolution creature (Rule 813)."""
+    return False  # Placeholder — Star Evolution card detection requires DB subtype data
+
+
 def should_apply_star_evo_replacement(creature: Creature) -> bool:
     """
     Check if a creature should apply the Star Evolution top-only leave replacement.

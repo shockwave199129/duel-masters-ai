@@ -100,13 +100,13 @@ after = check_state_based_actions(s)
 check("703.4e: Cannot attack → tapped",
       after.players[0].battle_zone[0].is_tapped)
 
-# ── 703.4f: Standalone Cross Gear → destroyed ─────────────────────────────
+# ── Cross Gear in battle zone (303.2) — not destroyed when generated ────────
 s = bare_state()
 gear = Creature(definition=card(30, "lone_blade", card_type=CardType.CROSS_GEAR), controller=0)
 s.players[0].battle_zone = [gear]
 after = check_state_based_actions(s)
-check("703.4f: Standalone Cross Gear → graveyard",
-      len(after.players[0].battle_zone) == 0 and len(after.players[0].graveyard) == 1)
+check("303.2: Generated Cross Gear stays in battle zone",
+      len(after.players[0].battle_zone) == 1 and len(after.players[0].graveyard) == 0)
 
 # ── 703.4g: Standalone Cell → graveyard ───────────────────────────────────
 s = bare_state()

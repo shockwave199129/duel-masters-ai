@@ -29,6 +29,15 @@ def move_zerom_to_battle(
     creature.temp_flags["_zerom_flipped"] = True
     p_state.battle_zone.append(creature)
     creature.apply_static_effects(state)
+    # Fire ON_ENTER_BATTLE_ZONE trigger for the flipped creature
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.ON_ENTER_BATTLE_ZONE, {
+        "source_uid": creature.uid,
+        "source_card_id": creature.id,
+        "controller": player,
+        "zone": "battle_zone",
+    }, creature.uid)
     return creature
 
 

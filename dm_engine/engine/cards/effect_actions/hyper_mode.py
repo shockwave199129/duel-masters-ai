@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from core.state import GameState, PendingTrigger
 from core.zones import Creature
-from core.cards import is_hyper_mode
+from core.cards import CardDefinition, is_hyper_mode
 from core.enums import CardSubtype
 from engine.zone_mover import (
     flip_forbidden,
@@ -11,6 +11,7 @@ from engine.zone_mover import (
     move_zerom_to_battle,
     swap_hyper_mode,
 )
+from engine.special_cards.zerom_assembly import perform_zerom_birth
 
 # ── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -126,27 +127,29 @@ def _do_neo_evolve(state: GameState, controller: int, trigger: PendingTrigger) -
 
 def _do_zerom_birth(state: GameState, controller: int, trigger: PendingTrigger) -> None:
     """
-    Handle ZEROM_BIRTH effect: flip a Zerom ritual/nebula to its creature face.
-    
-    Similar to DRAGSOLVE but for Zerom cards (Rule 812 / 701.31).
-    The trigger should target a Zerom card in the battle zone.
+    Handle ZEROM_BIRTH effect: flip Ritual + 4 Nebulas into 1 Zerom creature (812 / 701.31).
     """
     data = _trigger_data(trigger)
+    effect = dict(trigger.effect.effect_value or {})
+
+    component_uids = list(data.get("component_uids") or effect.get("component_uids") or [])
     target_uid = data.get("target_uid") or data.get("creature_uid")
-    if not target_uid:
-        return
-    
-    found = _find_creature(state, target_uid)
-    if not found:
-        return
-    _, creature = found
-    
-    # Check if this is a Zerom
-    if not creature.definition.card_subtype == CardSubtype.ZEROM:
-        return
-    
-    # Use the move_zerom_to_battle function which handles the flip
-    move_zerom_to_battle(state, controller, creature.definition)
+    if target_uid and target_uid not in component_uids:
+        component_uids.append(target_uid)
+
+    assembled = (
+        data.get("assembled_creature_definition")
+        or effect.get("assembled_creature_definition")
+    )
+    if not isinstance(assembled, CardDefinition):
+        assembled = None
+
+    perform_zerom_birth(
+        state,
+        controller,
+        component_uids=component_uids or None,
+        assembled_creature_def=assembled,
+    )
 
 
 

@@ -28,6 +28,8 @@ def _sba_cannot_attack_tap(state: GameState) -> bool:
     for player_idx in range(2):
         for creature in list(state.players[player_idx].battle_zone):
             # Check if creature has "cannot attack" keyword
+            if creature.is_ignored:
+                continue
             if creature.has_keyword(Keyword.CANNOT_ATTACK) and not creature.is_tapped:
                 creature.is_tapped = True
                 fired = True
@@ -37,41 +39,12 @@ def _sba_cannot_attack_tap(state: GameState) -> bool:
 
 def _sba_cross_gear_standalone(state: GameState) -> bool:
     """
-    Rule 703.4f: Cross Gear cards that are not attached to a creature are destroyed.
+    Legacy helper — not wired in the SBA checker.
 
-    Cross Gears MUST be attached via cross_gear_to_creature() action.
-    If one ends up standalone in the Battle Zone (edge case), it goes to graveyard.
-
-    Returns True if any Cross Gears were destroyed.
+    Rule 303.2: generated Cross Gear enters and remains in the Battle Zone.
+    Unattached Cross Gear is valid until crossed; it is not destroyed by SBA.
     """
-    from engine.zone_mover import _new_uid
-    from core.zones import GraveyardCard
-
-    fired = False
-
-    for player_idx in range(2):
-        player = state.players[player_idx]
-        # Find standalone Cross Gears (attached_to_uid is None)
-        standalone = [
-            c for c in player.battle_zone
-            if c.definition.card_type == CardType.CROSS_GEAR
-            and c.attached_to_uid is None
-        ]
-
-        for gear in standalone:
-            player.battle_zone.remove(gear)
-            player.graveyard.insert(
-                0,
-                GraveyardCard(
-                    definition=gear.definition,
-                    uid=gear.uid,
-                    died_from="sba_cross_gear_standalone",
-                    died_on_turn=state.turn_number,
-                ),
-            )
-            fired = True
-
-    return fired
+    return False
 
 
 def _sba_aura_fortress_standalone(state: GameState) -> bool:
@@ -94,7 +67,7 @@ def _sba_aura_fortress_standalone(state: GameState) -> bool:
         standalone = [
             c for c in player.battle_zone
             if c.definition.card_type in (CardType.AURA, CardType.FORTRESS)
-            and c.attached_to_uid is None
+            and getattr(c, "attached_to_uid", None) is None
         ]
 
         for card in standalone:
@@ -133,7 +106,7 @@ def _sba_weapon_standalone(state: GameState) -> bool:
         standalone = [
             c for c in player.battle_zone
             if c.definition.card_type == CardType.WEAPON
-            and c.attached_to_uid is None
+            and getattr(c, "attached_to_uid", None) is None
         ]
 
         for weapon in standalone:

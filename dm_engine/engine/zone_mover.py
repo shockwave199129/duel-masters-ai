@@ -95,8 +95,7 @@ def move_hand_to_battle(
         # Rule 801.3: No summoning sickness on evolution.
         base.has_summoning_sickness = False
 
-        # Fire ON_ENTER_BATTLE_ZONE trigger for evolution
-        _fire_enter_battle_zone_trigger(state, base, player)
+        # Rule 801.2: same creature — no new enter/summon triggers.
         return base
 
     creature = Creature(
@@ -116,6 +115,38 @@ def move_hand_to_battle(
     _fire_enter_battle_zone_trigger(state, creature, player)
     
     return creature
+
+
+def move_hand_to_field(
+    state: GameState,
+    player: int,
+    card_uid: str,
+    *,
+    target_player: int | None = None,
+) -> Creature:
+    """
+    Deploy a Field from hand into the battle zone (rules 308.2, 701.27).
+
+    Fields enter the battle zone upright, without summoning sickness, and are
+    flagged just_entered for D2 Field SBA (703.4l).
+    """
+    hand_card = _remove_from_hand(state, player, card_uid)
+    deploy_player = target_player if target_player is not None else player
+    p_state = state.players[deploy_player]
+
+    field_creature = Creature(
+        definition=hand_card.definition,
+        uid=hand_card.uid,
+        controller=deploy_player,
+        owner=player,
+        entered_turn=state.turn_number,
+        has_summoning_sickness=False,
+        field_orientation="upright",
+    )
+    field_creature.set_flag("just_entered", True)
+    p_state.battle_zone.append(field_creature)
+    field_creature.apply_static_effects(state)
+    return field_creature
 
 
 def _fire_enter_battle_zone_trigger(state: GameState, creature, player: int) -> None:
@@ -356,6 +387,13 @@ def move_battle_to_graveyard(
             uid=creature.uid,
             died_from=f"{reason}_returned_to_hyperspatial",
             died_on_turn=state.turn_number,
+        )
+
+    # Rule 804.7: linked God — only the anchor card leaves; others detach in BZ
+    from engine.god_manager import GodManager
+    if GodManager.is_god_link(creature):
+        return GodManager.move_linked_god_to_graveyard(
+            state, player, creature, reason=reason,
         )
 
     # Fire leave triggers before removing from battle zone

@@ -62,8 +62,8 @@ def card(cid, name, card_type=CardType.CREATURE, power=1000, keywords=None):
 def make_game_state():
     """Create a basic game state for testing."""
     players = (
-        PlayerState(player_index=0),
-        PlayerState(player_index=1),
+        PlayerState(player_index=0, player_name="P0"),
+        PlayerState(player_index=1, player_name="P1"),
     )
     return GameState(
         players=players,
@@ -114,10 +114,9 @@ ALL_PASSED &= check(
 )
 
 # ════════════════════════════════════════════════════════════════════════════════
-# Test 2: Cross Gear Standalone (Rule 703.4f)
-# ════════════════════════════════════════════════════════════════════════════════
+# Test 2: Cross Gear in battle zone (Rule 303.2 — not an SBA cleanup target)
 print("\n" + "─" * 70)
-print("  TEST 2: Cross Gear Standalone Destroy (Rule 703.4f)")
+print("  TEST 2: Cross Gear Stays in Battle Zone (Rule 303.2)")
 print("─" * 70)
 
 state = make_game_state()
@@ -126,33 +125,23 @@ gear = Creature(
     definition=gear_def,
     controller=0,
     uid="gear1",
-    attached_to_uid=None,  # Standalone!
 )
 state.players[0].battle_zone.append(gear)
 
-# Before SBA: gear is in battle zone
 ALL_PASSED &= check(
     "Before SBA: cross gear in battle zone",
     gear in state.players[0].battle_zone,
 )
 
-# Run SBA
 fired = _sba_cross_gear_standalone(state)
 ALL_PASSED &= check(
-    "SBA fires for standalone cross gear",
-    fired,
-)
-
-# After SBA: gear should be in graveyard
-ALL_PASSED &= check(
-    "After SBA: cross gear moved to graveyard",
-    gear not in state.players[0].battle_zone,
-    f"Graveyard count: {len(state.players[0].graveyard)}",
+    "Standalone cross gear helper is not wired in checker (303.2)",
+    not fired,
 )
 
 ALL_PASSED &= check(
-    "Cross gear is in graveyard",
-    len(state.players[0].graveyard) == 1,
+    "Cross gear remains in battle zone",
+    gear in state.players[0].battle_zone and len(state.players[0].graveyard) == 0,
 )
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -168,7 +157,6 @@ aura = Creature(
     definition=aura_def,
     controller=0,
     uid="aura1",
-    attached_to_uid=None,  # Standalone!
 )
 state.players[0].battle_zone.append(aura)
 
@@ -204,7 +192,6 @@ fortress = Creature(
     definition=fortress_def,
     controller=0,
     uid="fortress1",
-    attached_to_uid=None,  # Standalone!
 )
 state.players[0].battle_zone.append(fortress)
 
@@ -234,7 +221,6 @@ weapon = Creature(
     definition=weapon_def,
     controller=0,
     uid="weapon1",
-    attached_to_uid=None,  # Standalone!
 )
 state.players[0].battle_zone.append(weapon)
 
@@ -267,15 +253,8 @@ base = Creature(
 )
 
 gear_def = card(107, "Cross Gear", card_type=CardType.CROSS_GEAR, power=None)
-gear = Creature(
-    definition=gear_def,
-    controller=0,
-    uid="gear2",
-    attached_to_uid="base1",  # Attached!
-)
-
+base.attached_cards.append(gear_def)
 state.players[0].battle_zone.append(base)
-state.players[0].battle_zone.append(gear)
 
 # Run SBA
 fired = _sba_cross_gear_standalone(state)
@@ -284,10 +263,9 @@ ALL_PASSED &= check(
     not fired,
 )
 
-# Gear should still be in battle zone
 ALL_PASSED &= check(
-    "Attached cross gear remains in battle zone",
-    gear in state.players[0].battle_zone,
+    "Host creature with attached gear remains in battle zone",
+    base in state.players[0].battle_zone,
 )
 
 # ════════════════════════════════════════════════════════════════════════════════

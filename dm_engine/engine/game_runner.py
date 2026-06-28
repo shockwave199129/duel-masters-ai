@@ -11,7 +11,7 @@ from core.enums import Phase
 from core.state import GameState
 from engine.action_executor import execute_action
 from engine.action_generator import get_legal_actions
-from engine.sba_checker import check_turn_limit
+from engine.sba.actions.standalone_weapon import check_turn_limit
 
 
 Policy = Callable[[GameState, list[Action]], Action]

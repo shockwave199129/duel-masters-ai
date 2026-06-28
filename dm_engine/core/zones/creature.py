@@ -147,6 +147,9 @@ class Creature:
     controller:          int = 0   # player index (0 or 1)
     owner:               int = 0   # who owns the card (for "return to owner's hand")
 
+    # Field orientation (rule 308.3 / 701.28) — only meaningful for Field card types
+    field_orientation:   str = "upright"  # "upright" | "upside_down"
+
     # ── Properties ────────────────────────────────────────────────────────────
 
     @property
@@ -435,6 +438,61 @@ class Creature:
     def can_be_destroyed(self) -> bool:
         return not self.temp_flags.get("cannot_be_destroyed", False)
 
+    def is_protected_from(self, effect_source_civ: str | None = None, effect_source_race: str | None = None) -> bool:
+        """
+        Check if this creature is protected from an effect based on civilization or race.
+        
+        Rule: Protection prevents targeting/destruction by effects from specific civilizations/races.
+        Returns True if this creature has protection that blocks the effect source.
+        
+        Args:
+            effect_source_civ: Civilization of the effect source (or None)
+            effect_source_race: Race of the effect source (or None)
+        
+        Returns:
+            True if protected from the source, False otherwise
+        """
+        protection_info = self.temp_flags.get("protection")
+        if not protection_info or not isinstance(protection_info, dict):
+            return False
+        
+        from_civs = protection_info.get("from_civ", [])
+        from_races = protection_info.get("from_race", [])
+
+        def _as_str(value) -> str | None:
+            if value is None:
+                return None
+            if hasattr(value, "value"):
+                return str(value.value)
+            return str(value)
+
+        # Check civilization protection
+        source_civ = _as_str(effect_source_civ)
+        if source_civ and from_civs:
+            if isinstance(from_civs, str):
+                from_civs = [from_civs]
+            if source_civ.lower() in [_as_str(c).lower() for c in from_civs if _as_str(c)]:
+                return True
+
+        # Check race protection
+        source_race = _as_str(effect_source_race)
+        if source_race and from_races:
+            if isinstance(from_races, str):
+                from_races = [from_races]
+            if source_race.lower() in [_as_str(r).lower() for r in from_races if _as_str(r)]:
+                return True
+        
+        return False
+    
+    def has_protection(self) -> bool:
+        """Quick check: does this creature have ANY protection active?"""
+        protection_info = self.temp_flags.get("protection")
+        if not protection_info or not isinstance(protection_info, dict):
+            return False
+        from_civs = protection_info.get("from_civ", [])
+        from_races = protection_info.get("from_race", [])
+        return bool(from_civs or from_races)
+
     def is_blocker(self) -> bool:
         """Rule 116.2: ignored creatures cannot block."""
         return self.has_keyword(Keyword.BLOCKER) and not self.is_ignored
@@ -526,6 +584,11 @@ class Creature:
     def is_evolution_creature(self) -> bool:
         """True if this creature has cards stacked underneath it."""
         return len(self.evolution_stack) > 0
+
+    def is_field(self) -> bool:
+        """True if this battle-zone object is a Field card (rule 308)."""
+        from ..enums import CardType
+        return self.definition.card_type == CardType.FIELD
 
     def get_evolution_base_definitions(self) -> list[CardDefinition]:
         """

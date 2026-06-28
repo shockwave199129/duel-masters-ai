@@ -43,7 +43,9 @@ VALID_TRIGGER_EVENTS = {
     "on_enter_battle_zone", "on_attack", "on_break_shield", "on_destroy",
     "on_leave_battle_zone", "start_of_turn", "end_of_turn", "on_summon",
     "on_cast", "on_shield_trigger", "on_draw", "on_mana_charge", "on_block",
-    "on_battle", "on_win_battle", "on_direct_attack", "before_break", "none"
+    "on_battle", "on_win_battle", "on_direct_attack", "before_break",
+    "on_awaken", "on_dragsolve", "on_twinpact_flip", "on_hyper_release", "on_zerom_flip",
+    "none"
 }
 
 VALID_EFFECT_ACTIONS = {
@@ -58,7 +60,7 @@ VALID_EFFECT_ACTIONS = {
     "forbidden_release", "neo_evolve", "win_condition", "lose_condition", "evolve",
     "cross_gear", "god_link", "fortify", "deploy_field", "swap_zones", "turn_upside_down",
     "forbidden_explosion", "protection", "gain_control", "zerom_birth", "shieldify",
-    "must_attack", "must_block", "cannot_block", "none"
+    "must_attack", "must_block", "cannot_block", "power_attacker", "none"
 }
 
 VALID_ZONES = {
@@ -213,9 +215,9 @@ Each effect object must have these exact fields:
   "ability_index": <int, 0-based position in the list>,
   "raw_text": "<exact input line>",
   "effect_type": "<one of: keyword|triggered|activated|static|replacement|cost_mod|spell>",
-  "trigger_event": "<one of: on_enter_battle_zone|on_attack|on_break_shield|on_destroy|on_leave_battle_zone|start_of_turn|end_of_turn|on_summon|on_cast|on_battle|on_block|on_draw|on_mana_charge|on_shield_trigger|on_win_battle|on_direct_attack|before_break|none>",
+  "trigger_event": "<one of: on_enter_battle_zone|on_attack|on_break_shield|on_destroy|on_leave_battle_zone|start_of_turn|end_of_turn|on_summon|on_cast|on_battle|on_block|on_draw|on_mana_charge|on_shield_trigger|on_win_battle|on_direct_attack|before_break|on_awaken|on_dragsolve|on_twinpact_flip|on_hyper_release|on_zerom_flip|none>",
   "trigger_condition": "<JSON object as a string, or null>",
-  "effect_action": "<one of: draw|destroy|return_to_hand|search_deck|put_to_mana|summon_free|put_to_battle_zone|put_to_shield|add_to_hand|discard|tap|untap|power_modify|power_fix|cannot_attack|cannot_be_blocked|cannot_be_destroyed|win_battle|break_shield|look_at_top|shuffle|cost_reduce|cost_increase|give_keyword|banish_to_abyss|move_zone|reveal|gr_summon|copy_effect|attach_seal|remove_seal|gachinko_judge|hyperize|awaken|awaken_link|dragsolve|link_release|dragon_soul_evasion|psychic_release|dragon_evasion|twinpact_flip|forbidden_flip|combine|extra_ex_life|zerom_ritual|zerom_flip|forbidden_release|neo_evolve|win_condition|lose_condition|evolve|cross_gear|god_link|fortify|deploy_field|swap_zones|turn_upside_down|forbidden_explosion|protection|gain_control|zerom_birth|shieldify|must_attack|must_block|cannot_block|none>",
+  "effect_action": "<one of: draw|destroy|return_to_hand|search_deck|put_to_mana|summon_free|put_to_battle_zone|put_to_shield|add_to_hand|discard|tap|untap|power_modify|power_fix|cannot_attack|cannot_be_blocked|cannot_be_destroyed|win_battle|break_shield|look_at_top|shuffle|cost_reduce|cost_increase|give_keyword|banish_to_abyss|move_zone|reveal|gr_summon|copy_effect|attach_seal|remove_seal|gachinko_judge|hyperize|awaken|awaken_link|dragsolve|link_release|dragon_soul_evasion|psychic_release|dragon_evasion|twinpact_flip|forbidden_flip|combine|extra_ex_life|zerom_ritual|zerom_flip|forbidden_release|neo_evolve|win_condition|lose_condition|evolve|cross_gear|god_link|fortify|deploy_field|swap_zones|turn_upside_down|forbidden_explosion|protection|gain_control|zerom_birth|shieldify|must_attack|must_block|cannot_block|power_attacker|none>",
   "effect_target": "<JSON object as a string, or null>",
   "effect_value": "<JSON value as a string, or null>",
   "is_optional": <boolean>,

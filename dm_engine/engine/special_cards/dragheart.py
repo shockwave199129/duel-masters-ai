@@ -4,6 +4,7 @@ from core.state import GameState
 from core.zones import Creature, EvolutionStackEntry, HandCard
 from core.cards import CardDefinition
 from core.enums import CardSubtype
+from engine.zone_mover import creature_to_hyperspatial_card
 
 
 def dragsolve_dragheart(
@@ -26,11 +27,23 @@ def dragsolve_dragheart(
     creature = state.players[player].find_creature(creature_uid)
     if creature is None:
         raise ValueError(f"Creature {creature_uid} not found for dragsolve")
+    # Remove old static effects before flipping
+    creature.remove_static_effects(state)
     # Flip to creature face (rule 807.2: each face has independent characteristics)
     creature.definition = creature_face_defn
     creature.face = 1
     # entered_turn is NOT changed — rule 807.5a: orientation at BZ entry time determines sickness
     # has_summoning_sickness is not changed here — it reflects whether the card entered this turn
+    # Re-apply static effects from the creature face
+    creature.apply_static_effects(state)
+    # Fire ON_DRAGSOLVE trigger
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.ON_DRAGSOLVE, {
+        "source_uid": creature.uid,
+        "source_card_id": creature.id,
+        "controller": player,
+    }, creature.uid)
     return creature
 
 
@@ -136,6 +149,7 @@ def dragon_soul_evasion(
     # Flip remaining cells back to lower-cost face, inheriting state (rule 808.1b)
     surviving: list[Creature] = []
     for cell in remaining_cells:
+        cell.remove_static_effects(state)
         cell.face = 0
         cell.is_tapped = was_tapped
         # Dragheart Super Creatures have no sickness (rule 808.1a) so the surviving
@@ -144,6 +158,8 @@ def dragon_soul_evasion(
         cell.is_psychic_cell = False
         cell.linked_cells.clear()
         cell.power_modifiers = [m for m in inherited_mods]
+        # Re-apply static effects from the lower face
+        cell.apply_static_effects(state)
         p_state.battle_zone.append(cell)
         surviving.append(cell)
 

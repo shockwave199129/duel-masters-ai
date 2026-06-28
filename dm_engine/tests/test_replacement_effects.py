@@ -203,7 +203,7 @@ state_repl = GameState(
     players=(
         PlayerState(player_index=0, player_name="P0", deck=[deck_card],
                      battle_zone=[crep_creature]),
-        PlayerState(player_index=1, player_name="P1"),
+        PlayerState(player_index=1, player_name="P1", deck=[deck_card]),
     ),
     turn_info=TurnInfo(turn_number=2, active_player=0, phase=Phase.MAIN),
 )
@@ -237,7 +237,7 @@ state_normal = GameState(
     players=(
         PlayerState(player_index=0, player_name="P0", deck=[deck_card],
                      battle_zone=[normal_creature]),
-        PlayerState(player_index=1, player_name="P1"),
+        PlayerState(player_index=1, player_name="P1", deck=[deck_card]),
     ),
     turn_info=TurnInfo(turn_number=2, active_player=0, phase=Phase.MAIN),
 )

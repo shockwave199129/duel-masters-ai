@@ -1,5 +1,4 @@
-"""
-core/global_effects.py — Game-wide effects that apply to the entire board.
+"""core/global_effects.py — Game-wide effects that apply to the entire board.
 
 These are NOT tied to a specific card in a specific zone. They are conditions
 on the game itself. Examples:

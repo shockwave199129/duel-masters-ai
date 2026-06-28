@@ -6,10 +6,11 @@ import logging
 import random
 
 from core.cards import CardDefinition, CardEffect, is_hyper_mode
-from core.enums import EffectAction, CardSubtype
+from core.enums import EffectAction, CardSubtype, Civilization, ManaUsage
 from core.state import AwaitedChoice, GameState, PendingTrigger
 from core.zones import Creature, HandCard, ManaCard, ShieldCard, PowerModifier
 from engine.god_manager import GodManager
+from engine.action_generator import _get_mana_combinations
 from engine.sba_checker import check_state_based_actions
 from engine.zone_mover import (
     _new_uid,
@@ -108,15 +109,13 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
         elif choice_type == "select_target":
             et = effect.effect_target or {}
             zone = et.get("zone", "battle_zone")
-            valid_options = _collect_target_options(s, controller, zone, et)
+            valid_options = _collect_target_options(s, controller, zone, et, trigger)
         elif choice_type == "select_card":
             ev = effect.effect_value or {}
             from_zone = ev.get("from_zone", "hand")
             valid_options = _collect_card_options(s, controller, from_zone)
         elif choice_type == "select_mana":
-            # For mana selection, options are generated dynamically by
-            # _generate_choice_actions based on current mana zone state.
-            valid_options = ["mana_combo"]  # placeholder; action_generator expands
+            valid_options = _collect_mana_options(s, controller, effect, trigger)
 
         s.effect_stack.set_choice(AwaitedChoice(
             choice_type=choice_type,
@@ -247,7 +246,7 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
         _do_win_by_effect(s, controller, trigger)
     elif action == EffectAction.LOSE_CONDITION:
         _do_lose_by_effect(s, controller, trigger)
-    # ── Zone operations (Tier 3 / TODO 10) ──────────────────────────────────────
+    # ── Zone operations ──────────────────────────────────────────────────────────
     elif action == EffectAction.EVOLVE:
         _do_evolve(s, controller, trigger)
     elif action == EffectAction.CROSS_GEAR:
@@ -264,23 +263,25 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
         _do_turn_upside_down(s, controller, trigger)
     elif action == EffectAction.FORBIDDEN_EXPLOSION:
         _do_forbidden_explosion(s, controller, trigger)
-    # ── Defensive / Offensive (Tier 3 / TODO 11) ────────────────────────────────
+    # ── Defensive / Offensive ───────────────────────────────────────────────────
     elif action == EffectAction.PROTECTION:
         _do_protection(s, controller, trigger)
     elif action == EffectAction.GAIN_CONTROL:
         _do_gain_control(s, controller, trigger)
-    # ── Field state (Tier 3 / TODO 12) ──────────────────────────────────────────
+    # ── Field state ─────────────────────────────────────────────────────────────
     elif action == EffectAction.ZEROM_BIRTH:
         _do_zerom_birth(s, controller, trigger)
     elif action == EffectAction.SHIELDIFY:
         _do_shieldify(s, controller, trigger)
-    # ── Mandatory actions (Tier 3 / TODO 13) ────────────────────────────────────
+    # ── Mandatory actions ─────────────────────────────────────────────────────────
     elif action == EffectAction.MUST_ATTACK:
         _do_must_attack(s, controller, trigger)
     elif action == EffectAction.MUST_BLOCK:
         _do_must_block(s, controller, trigger)
     elif action == EffectAction.CANNOT_BLOCK:
         _do_cannot_block(s, controller, trigger)
+    elif action == EffectAction.POWER_ATTACKER:
+        _set_creature_flag(s, trigger, "power_attacker_active")
     # EffectAction.NONE and unknown values intentionally no-op.
 
     # Clear the "resolving effect" flag and run SBAs (rule 101.4d)
@@ -327,13 +328,32 @@ def _source_uid(trigger: PendingTrigger) -> str:
 
 
 def _collect_target_options(
-    state: GameState, player: int, zone: str, et: dict
+    state: GameState, player: int, zone: str, et: dict, trigger: PendingTrigger | None = None
 ) -> list[str]:
-    """Collect valid target uids for a select_target choice from the given zone."""
+    """
+    Collect valid target uids for a select_target choice from the given zone.
+    
+    Rule 606.2: Exclude creatures protected from the effect source based on
+    civilization or race. Protection prevents them from being valid targets.
+    """
     targets: list[str] = []
+    
+    # Determine effect source civ/race for protection checks
+    effect_source_civ = None
+    effect_source_race = None
+    if trigger:
+        source_creature = state.find_creature_anywhere(trigger.source_uid)
+        if source_creature:
+            _, src = source_creature
+            effect_source_civ = list(src.definition.civilizations)[0] if src.definition.civilizations else None
+            effect_source_race = list(src.definition.races)[0] if src.definition.races else None
+    
     if zone == "battle_zone":
         for p in state.players:
             for creature in p.battle_zone:
+                # Skip if protected from effect source
+                if creature.is_protected_from(effect_source_civ, effect_source_race):
+                    continue
                 targets.append(creature.uid)
     elif zone == "shield_zone":
         for p in state.players:
@@ -360,6 +380,89 @@ def _collect_card_options(state: GameState, player: int, from_zone: str) -> list
     elif from_zone == "graveyard":
         return [c.uid for c in p.graveyard]
     return []
+
+
+def _parse_mana_cost(effect_value: dict) -> int:
+    if "cost" in effect_value:
+        return int(effect_value["cost"])
+    select_mana = effect_value.get("select_mana")
+    if isinstance(select_mana, dict) and "cost" in select_mana:
+        return int(select_mana["cost"])
+    return 0
+
+
+def _parse_effect_civilizations(effect_value: dict) -> frozenset[Civilization]:
+    raw = effect_value.get("civilizations")
+    select_mana = effect_value.get("select_mana")
+    if raw is None and isinstance(select_mana, dict):
+        raw = select_mana.get("civilizations")
+    if not raw:
+        return frozenset()
+    if isinstance(raw, (str, Civilization)):
+        return frozenset({_coerce_civilization(raw)})
+    civs: set[Civilization] = set()
+    for item in raw:
+        civs.add(_coerce_civilization(item))
+    return frozenset(civs)
+
+
+def _coerce_civilization(value: str | Civilization) -> Civilization:
+    if isinstance(value, Civilization):
+        return value
+    return Civilization(value)
+
+
+def _resolve_mana_payment_requirements(
+    state: GameState,
+    trigger: PendingTrigger,
+    effect: CardEffect,
+) -> tuple[int, frozenset[Civilization]]:
+    """
+    Determine mana cost and required civilizations for a select_mana choice.
+
+    Parsed effect_value takes precedence; otherwise fall back to the source
+    card's printed cost/civilizations.
+    """
+    ev = effect.effect_value or {}
+    cost = _parse_mana_cost(ev)
+    card_civs = _parse_effect_civilizations(ev)
+
+    if cost == 0 and not card_civs:
+        found = state.find_creature_anywhere(trigger.source_uid)
+        if found:
+            defn = found[1].definition
+            cost = defn.cost
+            card_civs = defn.civilizations
+        else:
+            for p_state in state.players:
+                hand_card = p_state.find_in_hand(trigger.source_uid)
+                if hand_card:
+                    cost = hand_card.definition.cost
+                    card_civs = hand_card.definition.civilizations
+                    break
+                mana_card = p_state.find_mana(trigger.source_uid)
+                if mana_card:
+                    cost = mana_card.definition.cost
+                    card_civs = mana_card.definition.civilizations
+                    break
+
+    return cost, card_civs
+
+
+def _collect_mana_options(
+    state: GameState,
+    player: int,
+    effect: CardEffect,
+    trigger: PendingTrigger,
+) -> list[list[ManaUsage]]:
+    """
+    Build valid mana payment combinations for an awaited select_mana choice.
+
+    Mirrors _get_mana_combinations (rule 112.2a) using the player's current
+    untapped mana zone.
+    """
+    cost, card_civs = _resolve_mana_payment_requirements(state, trigger, effect)
+    return _get_mana_combinations(state.players[player].mana_zone, cost, card_civs)
 
 
 def _move_card_to_hand(state: GameState, player: int, definition: CardDefinition, uid: str | None = None) -> HandCard:

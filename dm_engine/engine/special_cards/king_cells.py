@@ -120,11 +120,14 @@ def combine_king_cells(
         raise ValueError(f"King Cell {uid} not found in hand or mana zone")
 
     primary = cell_creatures[0]
+    primary.remove_static_effects(state)
     primary.definition = king_creature_defn
     primary.has_summoning_sickness = True
     primary.entered_turn = state.turn_number
     primary.is_tapped = any(c.is_tapped for c in cell_creatures)
     primary.linked_cells = list(cell_creatures)
+    # Re-apply static effects from the King Creature definition
+    primary.apply_static_effects(state)
     p_state.battle_zone.append(primary)
     return primary
 

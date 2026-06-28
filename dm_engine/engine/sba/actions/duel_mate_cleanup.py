@@ -2,6 +2,7 @@
 from __future__ import annotations
 from core.state import GameState
 from core.zones import Creature
+from engine.zone_mover import creature_to_hyperspatial_card
 
 
 def _sba_duel_mate_cleanup(state: GameState) -> bool:
@@ -24,10 +25,10 @@ def _sba_duel_mate_cleanup(state: GameState) -> bool:
         ]
 
         for creature in duel_mates:
-            # Evict Duel Mates that still have summoning sickness AND were not
-            # properly summoned. Established Duel Mates (no sickness) are fine.
+            # Evict Duel Mates that were not properly summoned and no longer
+            # have summoning sickness (illegal battle zone entry).
             properly_summoned = creature.temp_flags.get("properly_summoned_as_duel_mate", False)
-            if creature.has_summoning_sickness and not properly_summoned:
+            if not properly_summoned and not creature.has_summoning_sickness:
                 creature.remove_static_effects(state)
                 state.players[player_idx].battle_zone.remove(creature)
                 state.global_effects.remove_by_source(creature.uid)

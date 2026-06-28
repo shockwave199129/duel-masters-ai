@@ -28,10 +28,15 @@ from core.enums import GameResult, CardType, Keyword
 from core.zones import Creature, GraveyardCard
 from engine.sba.missing_sbas import (
     _sba_cannot_attack_tap,
-    _sba_cross_gear_standalone,
     _sba_aura_fortress_standalone,
     _sba_weapon_standalone,
 )
+from engine.sba.actions.god_link import _sba_god_link_invalid_detach
+from engine.sba.actions.standalone_cell import _sba_standalone_cell
+from engine.sba.actions.invalid_type import _sba_invalid_type
+from engine.sba.actions.d2_field import _sba_d2_field
+from engine.sba.actions.duel_mate_cleanup import _sba_duel_mate_cleanup
+from engine.sba.actions.g_castle import _sba_g_castle_shield
 
 if TYPE_CHECKING:
     from core.state import GameState
@@ -86,13 +91,18 @@ def _check_once(state: GameState) -> bool:
     fired |= check_power_zero(state)                # 703.4c
     fired |= check_battle_losers(state)             # 703.4d
     fired |= _sba_cannot_attack_tap(state)          # 703.4e (NEW)
-    fired |= _sba_cross_gear_standalone(state)      # 703.4f (NEW)
-    fired |= _sba_aura_fortress_standalone(state)   # 703.4g (NEW)
+    # Cross Gear in BZ is valid when generated (303.2); no standalone-destroy SBA.
+    fired |= _sba_god_link_invalid_detach(state)    # 804.2b — invalid God link detach
+    fired |= _sba_standalone_cell(state)            # 703.4g — standalone Cell
+    fired |= _sba_invalid_type(state)               # 703.4i — invalid BZ type
+    fired |= _sba_aura_fortress_standalone(state)   # Aura/Fortress standalone
     fired |= check_evolution_reconstruction(state)  # 703.4h
-    fired |= check_smax_uniqueness(state)           # 703.4i
+    fired |= check_smax_uniqueness(state)           # 703.4i S-MAX
     fired |= check_seal_removal(state)              # 703.4j
-    fired |= check_g_castle_shield(state)           # 703.4k
-    fired |= _sba_weapon_standalone(state)          # 703.4m (NEW)
+    fired |= _sba_g_castle_shield(state)            # 703.4k / 822
+    fired |= _sba_d2_field(state)                   # 703.4l — D2 Field uniqueness
+    fired |= _sba_weapon_standalone(state)          # 703.4m
+    fired |= _sba_duel_mate_cleanup(state)          # 820 — Duel Mate cleanup
 
     return fired
 
@@ -103,15 +113,22 @@ def _check_once(state: GameState) -> bool:
 
 def check_zero_shields(state: GameState) -> bool:
     """Rule 703.4a: Player with 0 shields receives direct attack → loses."""
-    for player_idx in range(2):
-        if len(state.players[player_idx].shield_zone) == 0:
-            state.result = GameResult.PLAYER_1_WINS if player_idx == 0 else GameResult.PLAYER_0_WINS
-            return True
+    if state.result != GameResult.IN_PROGRESS:
+        return False
+    ctx = state.attack_context
+    if ctx is None or not ctx.received_direct_attack:
+        return False
+    defender_player = ctx.blocker_player if ctx.blocker_player is not None else (1 - ctx.attacker_player)
+    if len(state.players[defender_player].shield_zone) == 0:
+        state.result = GameResult.PLAYER_1_WINS if defender_player == 0 else GameResult.PLAYER_0_WINS
+        return True
     return False
 
 
 def check_deck_empty(state: GameState) -> bool:
     """Rule 703.4b: Player tries to draw from empty deck → loses."""
+    if state.result != GameResult.IN_PROGRESS:
+        return False
     for player_idx in range(2):
         if len(state.players[player_idx].deck) == 0:
             state.result = GameResult.PLAYER_1_WINS if player_idx == 0 else GameResult.PLAYER_0_WINS
@@ -129,7 +146,8 @@ def check_power_zero(state: GameState) -> bool:
     for player_idx in range(2):
         creatures_to_destroy = [
             c for c in state.players[player_idx].battle_zone
-            if c.power <= 0
+            if c.definition.card_type == CardType.CREATURE
+            and c.compute_power(state) <= 0
         ]
         for creature in creatures_to_destroy:
             _destroy_creature(state, player_idx, creature, "sba_power_zero")
@@ -143,7 +161,7 @@ def check_battle_losers(state: GameState) -> bool:
     for player_idx in range(2):
         creatures_to_destroy = [
             c for c in state.players[player_idx].battle_zone
-            if c.lost_battle
+            if c.temp_flags.get("lost_battle", False)
         ]
         for creature in creatures_to_destroy:
             _destroy_creature(state, player_idx, creature, "sba_battle_loser")
@@ -175,6 +193,7 @@ def _destroy_creature(
         controller=player_idx,
     )
     if replacement is not None:
+        creature.temp_flags["_replacement_already_applied"] = True
         return
 
     # Psychic/Dragheart creatures go to Hyperspatial (Rule 805.4b, 807.4b)

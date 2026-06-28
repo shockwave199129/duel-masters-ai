@@ -374,7 +374,7 @@ dream_card = card(700, "Dream Phantom", card_subtype=CardSubtype.DREAM, power=60
 dream_creature_a = make_creature(dream_card, controller=0, entered_turn=2)
 dream_creature_b = make_creature(dream_card, controller=0, entered_turn=3)
 state_7a = make_state(p0_battle=[dream_creature_a, dream_creature_b])
-from engine.sba_checker import _sba_dream_rare_uniqueness
+from engine.sba.actions.dream_rare import _sba_dream_rare_uniqueness
 _sba_dream_rare_uniqueness(state_7a)
 remaining_7a = [c.definition.id for c in state_7a.players[0].battle_zone]
 gy_7a = [g.definition.id for g in state_7a.players[0].graveyard]
@@ -423,7 +423,7 @@ check("8b: is_duel_mate() returns True for DUEL_MATE subtype",
 duel_mate_creature = make_creature(duel_mate_card, controller=0, entered_turn=2)
 duel_mate_creature.has_summoning_sickness = False  # not properly summoned
 state_8c = make_state(p0_battle=[duel_mate_creature])
-from engine.sba_checker import _sba_duel_mate_cleanup
+from engine.sba.actions.duel_mate_cleanup import _sba_duel_mate_cleanup
 _sba_duel_mate_cleanup(state_8c)
 battle_count = len(state_8c.players[0].battle_zone)
 hyper_count = len(state_8c.players[0].hyperspatial_zone)

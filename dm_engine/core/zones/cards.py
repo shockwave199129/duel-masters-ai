@@ -177,6 +177,7 @@ class ShieldCard:
     definition:  CardDefinition
     uid:         str  = field(default_factory=_new_uid)
     is_revealed: bool = False    # True only during the break resolution window
+    is_face_up:  bool = False    # 701.32a face-down (default) / 701.32b face-up shield
     fortified_castles: list[CardDefinition] = field(default_factory=list)
 
     @property
@@ -201,6 +202,8 @@ class ShieldCard:
     def __repr__(self) -> str:
         if self.is_revealed:
             return f"<Shield:{self.definition.name}[REVEALED]>"
+        if self.is_face_up:
+            return f"<Shield:{self.definition.name}[FACE-UP]>"
         return f"<Shield:???[{self.uid}]>"
 
 

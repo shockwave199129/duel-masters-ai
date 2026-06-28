@@ -128,10 +128,9 @@ for label, defn, ctor in (
     check(f"{label} moves to battle zone", len(after.players[0].battle_zone) == 1)
 
 s = state(Phase.ATTACK)
-creature = after.players[0].battle_zone[0]
-creature.has_summoning_sickness = False
-s.players[0].battle_zone = [creature]
-after = execute_action(s, attack_player(0, creature.uid, creature.id))
+attacker = ZCreature(definition=c, controller=0, owner=0, entered_turn=2, has_summoning_sickness=False)
+s.players[0].battle_zone = [attacker]
+after = execute_action(s, attack_player(0, attacker.uid, attacker.id))
 check("Attack creates context", after.attack_context is not None)
 check("Attack taps attacker", after.players[0].battle_zone[0].is_tapped)
 check("Attack moves to declaration phase", after.current_phase == Phase.ATTACK_DECLARE)

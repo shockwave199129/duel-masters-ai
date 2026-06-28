@@ -54,11 +54,6 @@ def resolve_battle(state: GameState) -> GameState:
     if defender_power == -INFINITY:
         defender.set_flag("lost_battle", True)
 
-    if attacker.has_keyword(Keyword.SLAYER):
-        defender.set_flag("lost_battle", True)
-    if defender.has_keyword(Keyword.SLAYER):
-        attacker.set_flag("lost_battle", True)
-
     # Rule 108.1b: when referencing a creature's power, a negative value is
     # treated as 0. So battle comparison uses effective_power, while the
     # underlying compute_power stays accurate (so the SBA can still detect
@@ -82,10 +77,18 @@ def resolve_battle(state: GameState) -> GameState:
         else:
             attacker.set_flag("lost_battle", True)
 
-    # Fire ON_WIN_BATTLE triggers
+    # Slayer revenge-on-loss (OCG rule): after power comparison, if a Slayer
+    # creature lost the battle, the opposing creature is also destroyed.
+    # Slayer does NOT auto-win or grant survival — it only triggers on loss.
+    if attacker.temp_flags.get("lost_battle", False) and attacker.has_keyword(Keyword.SLAYER):
+        defender.set_flag("lost_battle", True)
+    if defender.temp_flags.get("lost_battle", False) and defender.has_keyword(Keyword.SLAYER):
+        attacker.set_flag("lost_battle", True)
+
+    # Fire ON_WIN_BATTLE triggers (recompute after Slayer)
     attacker_lost = attacker.temp_flags.get("lost_battle", False)
     defender_lost = defender.temp_flags.get("lost_battle", False)
-    
+
     if not attacker_lost:
         fire_trigger(s, TriggerEvent.ON_WIN_BATTLE, {
             "source_uid": attacker.uid,

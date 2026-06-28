@@ -24,12 +24,24 @@ def awaken_psychic_creature(
     creature = state.players[player].find_creature(creature_uid)
     if creature is None:
         raise ValueError(f"Creature {creature_uid} not found for awaken")
+    # Remove old static effects before flipping (rule 805.2: independent characteristics)
+    creature.remove_static_effects(state)
     # Flip to the awakened definition (rule 805.2: each face has independent characteristics)
     creature.definition = awakened_face_defn
     creature.face = 1
     # Rule 805.6: no summoning sickness after awakening
     creature.has_summoning_sickness = False
     # uid, is_tapped, entered_turn, power_modifiers preserved (rule 805.5)
+    # Re-apply static effects from the awakened face
+    creature.apply_static_effects(state)
+    # Fire ON_AWAKEN trigger
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.ON_AWAKEN, {
+        "source_uid": creature.uid,
+        "source_card_id": creature.id,
+        "controller": player,
+    }, creature.uid)
     return creature
 
 
@@ -83,6 +95,7 @@ def link_psychic_cells(
         state.global_effects.remove_by_source(other.uid)
 
     # Flip primary cell to the Super Creature definition
+    primary.remove_static_effects(state)
     primary.definition = super_creature_defn
     primary.face = 1
 
@@ -96,6 +109,18 @@ def link_psychic_cells(
     for cell in cells:
         cell.is_psychic_cell = True
     primary.linked_cells = list(cells)  # includes primary itself
+
+    # Re-apply static effects from the Super Creature face
+    primary.apply_static_effects(state)
+
+    # Fire ON_AWAKEN trigger for the primary (combined) creature
+    from core.enums import TriggerEvent
+    from engine.trigger_registry import fire_trigger
+    fire_trigger(state, TriggerEvent.ON_AWAKEN, {
+        "source_uid": primary.uid,
+        "source_card_id": primary.id,
+        "controller": player,
+    }, primary.uid)
 
     return primary
 
@@ -139,9 +164,13 @@ def apply_psychic_release(
     creature = state.players[player].find_creature(creature_uid)
     if creature is None:
         raise ValueError(f"Creature {creature_uid} not found for psychic_release")
+    # Remove old static effects before flipping
+    creature.remove_static_effects(state)
     creature.definition = lower_face_defn
     creature.face = 0
     creature.temp_flags["_replacement_already_applied"] = True
+    # Re-apply static effects from the lower face
+    creature.apply_static_effects(state)
     return creature
 
 

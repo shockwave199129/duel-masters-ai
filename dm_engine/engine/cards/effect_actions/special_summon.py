@@ -2,17 +2,21 @@
 from __future__ import annotations
 
 from core.state import GameState, PendingTrigger
+from core.enums import CardType
 from core.zones import Creature, HandCard
-from core.cards import CardDefinition
+from core.cards import CardDefinition, is_g_castle
+from engine.evolution_rules import is_valid_evolution_base
 from engine.zone_mover import (
     _new_uid,
     awaken_psychic_creature,
     combine_king_cells,
     cross_gear_to_creature,
     dragsolve_dragheart,
+    fortify_g_castle_to_shield,
     fortify_shield_with_castle,
     link_psychic_cells,
     move_hand_to_battle,
+    move_hand_to_field,
     move_ultra_gr_to_battle,
 )
 from engine.god_manager import GodManager
@@ -129,30 +133,48 @@ def _do_evolve(state: GameState, controller: int, trigger: PendingTrigger) -> No
     if not target_uid or not evolve_card_uid:
         return
 
-    # Find the base creature in battle zone
     found = _find_creature(state, target_uid)
     if not found:
         return
     _, base_creature = found
 
-    # Move the evolution creature from hand to battle, stacking on base
+    p_state = state.players[controller]
+    hand_card = p_state.find_in_hand(evolve_card_uid)
+    if not hand_card:
+        return
+
+    # Rule 801.1a: reject invalid evolution bases
+    if not is_valid_evolution_base(hand_card.definition, base_creature):
+        return
+
     move_hand_to_battle(state, controller, evolve_card_uid, evolution_base_uid=target_uid)
 
 
 
+def _find_cross_gear_creature(state: GameState, player: int, gear_uid: str) -> Creature | None:
+    """Cross Gear must be in the battle zone before crossing (rules 701.16/701.17)."""
+    gear = state.players[player].find_creature(gear_uid)
+    if gear is None or gear.definition.card_type != CardType.CROSS_GEAR:
+        return None
+    return gear
+
+
 def _do_cross_gear(state: GameState, controller: int, trigger: PendingTrigger) -> None:
     """
-    Handle CROSS_GEAR effect: attach a Cross Gear from hand to a creature.
+    Handle CROSS_GEAR effect: attach a Cross Gear from battle zone to a creature.
 
     Effect value:
     - target_uid: UID of the creature to attach to (in battle zone)
-    - gear_uid: UID of the Cross Gear in hand
+    - gear_uid: UID of the Cross Gear in battle zone
     """
     data = _trigger_data(trigger)
     effect = _effect_value(trigger)
     target_uid = data.get("target_uid") or effect.get("target_uid")
     gear_uid = data.get("gear_uid") or effect.get("gear_uid")
     if not target_uid or not gear_uid:
+        return
+
+    if _find_cross_gear_creature(state, controller, gear_uid) is None:
         return
 
     cross_gear_to_creature(state, controller, gear_uid, target_uid)
@@ -184,13 +206,21 @@ def _do_fortify(state: GameState, controller: int, trigger: PendingTrigger) -> N
     if not target_uid or not castle_uid:
         return
 
-    fortify_shield_with_castle(state, controller, castle_uid, target_uid)
+    p_state = state.players[controller]
+    hand_card = p_state.find_in_hand(castle_uid)
+    if not hand_card:
+        return
+
+    if is_g_castle(hand_card.definition):
+        fortify_g_castle_to_shield(state, controller, castle_uid, target_uid)
+    else:
+        fortify_shield_with_castle(state, controller, castle_uid, target_uid)
 
 
 
 def _do_deploy_field(state: GameState, controller: int, trigger: PendingTrigger) -> None:
     """
-    Handle DEPLOY_FIELD effect: deploy a Field card from hand to the field zone.
+    Handle DEPLOY_FIELD effect: deploy a Field card from hand to the battle zone.
 
     Effect value:
     - field_uid: UID of the Field card in hand
@@ -203,15 +233,7 @@ def _do_deploy_field(state: GameState, controller: int, trigger: PendingTrigger)
     if not field_uid:
         return
 
-    p_state = state.players[controller]
-    hand_card = p_state.find_in_hand(field_uid)
-    if not hand_card:
-        return
-
-    # Remove from hand and add to field zone
-    p_state.hand.remove(hand_card)
-    target_p_state = state.players[target_player]
-    target_p_state.field_zone.append(hand_card.definition)
+    move_hand_to_field(state, controller, field_uid, target_player=target_player)
 
 
 
@@ -242,11 +264,5 @@ def _do_god_link(state: GameState, controller: int, trigger: PendingTrigger) -> 
     if not hand_card:
         return
 
-    # Validate God link compatibility
-    if not GodManager.validate_god_link(source_creature.definition, hand_card.definition):
-        return
-
-    # Move the link card from hand to battle zone, attached to the source
-    p_state.hand.remove(hand_card)
-    source_creature.attached_cards.append(hand_card.definition)
-    source_creature.temp_flags["god_linked"] = True
+    # Move the link card from hand — link onto the anchor God (804.3)
+    GodManager.link_gods(state, controller, source_creature, hand_card)

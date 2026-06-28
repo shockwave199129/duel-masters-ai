@@ -51,6 +51,7 @@ from core.enums import (
 from core.state import GameState
 from core.zones import Creature, ManaCard
 from core.cards import CardDefinition, is_twinpact, get_twinpact_characteristics, is_duel_mate
+from engine.evolution_rules import get_valid_evolution_bases
 from core.actions import (
     Action,
     charge_mana, pass_charge,
@@ -656,7 +657,7 @@ def _generate_attack_declarations(state: GameState) -> list[Action]:
     if not state.global_effects.can_attack_globally(player):
         return [pass_attack(player)]
 
-    # Check for creatures that MUST attack
+    # Check for creatures that MUST attack (rule 506.1b)
     must_attack_creatures = [
         c for c in p_state.battle_zone
         if c.can_attack() and c.temp_flags.get("must_attack", False)
@@ -665,6 +666,9 @@ def _generate_attack_declarations(state: GameState) -> list[Action]:
 
     for creature in p_state.battle_zone:
         if not creature.can_attack():
+            continue
+        # Rule 115.3b: creatures with 0 or negative effective power cannot attack
+        if creature.effective_power(state) < 1:
             continue
 
         # ── Attack player (rule 506.1e) ────────────────────────────────────
@@ -686,10 +690,26 @@ def _generate_attack_declarations(state: GameState) -> list[Action]:
                     target.uid, target.id
                 ))
 
-    # If there are must-attack creatures that can attack, pass is NOT legal
-    # (Rule 506.1b: compelled creatures MUST attack)
-    if not has_must_attack:
+    # Rule 506.1b: If there are must-attack creatures, only attacks using those
+    # creatures are legal. Pass is NOT legal while any must-attack creature can still attack.
+    if has_must_attack:
+        # Filter to only attacks by must-attack creatures
+        must_attack_uids = {mc.uid for mc in must_attack_creatures}
+        compelled_actions = [
+            a for a in actions
+            if a.action_type in (ActionType.ATTACK_PLAYER, ActionType.ATTACK_CREATURE)
+            and a.card_uid in must_attack_uids
+        ]
+        if compelled_actions:
+            # Return only legal attacks (by compelled creatures)
+            return compelled_actions
+        # If no valid attacks remain for compelled creatures, pass is the only option
+        # (they physically cannot attack due to state)
+        return [pass_attack(player)]
+    else:
+        # No must-attack creatures, pass is legal
         actions.append(pass_attack(player))
+    
     return actions
 
 
@@ -818,7 +838,7 @@ def _generate_block_actions(state: GameState) -> list[Action]:
         if not attacker.can_be_blocked():
             return [pass_block(defender)]
 
-    # Check for creatures that MUST block (and can legally block)
+    # Check for creatures that MUST block (and can legally block) — rule 507.1b
     must_block_creatures = [
         c for c in d_state.battle_zone
         if not c.is_ignored and not c.is_tapped
@@ -848,9 +868,12 @@ def _generate_block_actions(state: GameState) -> list[Action]:
         if creature.is_guardman() and ctx.is_attacking_creature:
             actions.append(declare_guardman(defender, creature.uid, creature.id))
 
-    # If there are must-block creatures that can legally block, pass is NOT legal
+    # Rule 507.1b: If there are must-block creatures, all of them must be chosen
+    # before pass is legal. This is enforced by tracking in action_executor.
+    # For now, we include the pass action but the executor will validate.
     if not has_must_block:
         actions.append(pass_block(defender))
+    
     return actions
 
 
@@ -1126,21 +1149,28 @@ def _generate_choice_actions(state: GameState) -> list[Action]:
             ))
 
     elif choice.choice_type == "select_mana":
-        # Generate one select_mana action per valid mana combination.
-        # The effect's effect_value may carry cost/civ info; if not,
-        # fall back to all untapped mana in the player's zone.
-        p_state = state.players[player]
-        mana_zone = p_state.mana_zone
-        ev = choice.effect.effect_value if choice.effect else {}
-        cost = int(ev.get("cost", 0)) if ev else 0
-        card_civs: frozenset = frozenset()
-        if choice.effect and len(choice.effect.civilizations) > 0:
-            card_civs = choice.effect.civilizations
-        combos = _get_mana_combinations(mana_zone, cost, card_civs)
+        # Use precomputed combos from effect_executor when available.
+        if (
+            options
+            and not (len(options) == 1 and options[0] == "mana_combo")
+            and isinstance(options[0], list)
+        ):
+            combos = options
+        else:
+            p_state = state.players[player]
+            ev = choice.effect.effect_value if choice.effect else {}
+            cost = int(ev.get("cost", 0)) if ev else 0
+            card_civs: frozenset = frozenset()
+            if ev:
+                raw_civs = ev.get("civilizations")
+                if raw_civs:
+                    card_civs = frozenset(
+                        Civilization(c) if isinstance(c, str) else c for c in raw_civs
+                    )
+            combos = _get_mana_combinations(p_state.mana_zone, cost, card_civs)
         for combo in combos:
             actions.append(select_mana(player, list(combo), choice.source_uid))
         if not actions:
-            # No valid mana combos — allow pass to decline
             actions.append(pass_action(player, "select_mana_none"))
 
     elif choice.choice_type == "select_targets":
@@ -1357,53 +1387,8 @@ def _get_valid_evolution_bases(
     defn:    CardDefinition,
     p_state,
 ) -> list[Creature]:
-    """
-    Rule 801.1: evolution requires a valid base creature in the battle zone.
-    Rule 801.1a: if no valid evolution base exists, cannot summon.
-
-    The evolution base must:
-      - Be a creature (or appropriate card type per the evolution spec)
-      - Match the evolution requirements:
-        * At least one matching race from defn.evolution_source_races, OR
-        * At least one matching type from defn.evolution_source_types
-      - Not be ignored (rule 116.2: ignored creatures can't be evolved onto)
-
-    Special cases:
-      - S-MAX Evolution (rule 815): no base required — handled in caller.
-      - Star Evolution (rule 813): needs a base of any creature.
-      - Forbidden Star Evolution (rule 813.1b): can summon without base.
-    """
-    # S-MAX: no base required
-    if defn.card_subtype == CardSubtype.STAR_MAX:
-        return []  # handled separately (no base chosen)
-
-    valid = []
-    for creature in p_state.battle_zone:
-        if creature.is_ignored:          # rule 116.2
-            continue
-        if creature.definition.card_type != CardType.CREATURE:
-            continue
-
-        # Check evolution requirements: race OR type match
-        has_race_match = (
-            defn.evolution_source_races and
-            defn.evolution_source_races.intersection(creature.definition.races)
-        )
-        has_type_match = (
-            defn.evolution_source_types and
-            creature.definition.card_type in defn.evolution_source_types
-        )
-
-        if defn.evolution_source_races or defn.evolution_source_types:
-            # At least one requirement exists → must match at least one
-            if has_race_match or has_type_match:
-                valid.append(creature)
-        else:
-            # No specific requirements → any creature is a valid base
-            # (e.g., Star Evolution, generic evolution)
-            valid.append(creature)
-
-    return valid
+    """Rule 801.1 — delegate to shared evolution_rules module."""
+    return get_valid_evolution_bases(defn, p_state.battle_zone)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

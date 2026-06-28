@@ -1,5 +1,6 @@
 """engine/special_cards/twinpact.py — Twinpact card mechanics."""
 from __future__ import annotations
+from typing import Optional
 from core.state import GameState
 from core.zones import Creature, EvolutionStackEntry, HandCard
 from core.cards import CardDefinition
@@ -8,7 +9,7 @@ from core.cards import is_twinpact
 from core.cards import get_other_face
 
 
-def flip_twinpact(creature: Creature, card_db=None) -> Creature:
+def flip_twinpact(creature: Creature, card_db=None, state: Optional[GameState] = None) -> Creature:
     """
     Flip a Twinpact card to its other face when it enters the battle zone.
 
@@ -25,6 +26,8 @@ def flip_twinpact(creature: Creature, card_db=None) -> Creature:
     # Try to resolve the other face from the card database
     other_face = get_other_face(creature.definition, card_db=card_db)
     if other_face is not None:
+        if state is not None:
+            creature.remove_static_effects(state)
         creature.definition = other_face
     else:
         # Fallback: manually clone with swapped face ID
@@ -47,8 +50,22 @@ def flip_twinpact(creature: Creature, card_db=None) -> Creature:
             is_multiface=old_def.is_multiface,
             other_face_id=old_def.id,  # point back to the original
         )
+        if state is not None:
+            creature.remove_static_effects(state)
         creature.definition = new_def
     creature.temp_flags["_twinpact_flipped"] = not creature.temp_flags.get("_twinpact_flipped", False)
+    # Re-apply static effects from the new face
+    if state is not None:
+        creature.apply_static_effects(state)
+    # Fire ON_TWINPACT_FLIP trigger
+    if state is not None:
+        from core.enums import TriggerEvent
+        from engine.trigger_registry import fire_trigger
+        fire_trigger(state, TriggerEvent.ON_TWINPACT_FLIP, {
+            "source_uid": creature.uid,
+            "source_card_id": creature.id,
+            "controller": creature.controller,
+        }, creature.uid)
     return creature
 
 

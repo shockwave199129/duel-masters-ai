@@ -4,9 +4,11 @@ from __future__ import annotations
 import random
 
 from core.state import GameState, PendingTrigger
+from core.enums import CardType
 from core.cards import CardDefinition
 from core.zones import Creature, HandCard, ManaCard, ShieldCard
 from engine.zone_mover import (
+    _new_uid,
     flip_forbidden,
     flip_twinpact,
     move_battle_to_hyperspatial,
@@ -28,6 +30,148 @@ def _find_creature(state: GameState, uid: str) -> tuple[int, Creature] | None:
 
 def _trigger_data(trigger: PendingTrigger) -> dict:
     return dict(trigger.trigger_data)
+
+
+_BZ_STANDALONE_TYPES = frozenset({
+    CardType.CREATURE,
+    CardType.FIELD,
+    CardType.TAMASEED,
+    CardType.CROSS_GEAR,
+})
+
+
+def _find_in_zone(p_state, zone_name: str, uid: str):
+    zone = getattr(p_state, zone_name, None)
+    if zone is None:
+        return None
+    for card in zone:
+        if getattr(card, "uid", None) == uid:
+            return card
+    return None
+
+
+def _can_enter_battle_zone(defn: CardDefinition) -> bool:
+    return defn.card_type in _BZ_STANDALONE_TYPES
+
+
+def _remove_global_effects_for_creature(state: GameState, creature: Creature) -> None:
+    state.global_effects.remove_by_source(creature.uid)
+
+
+def _creature_entering_battle_zone(
+    state: GameState,
+    player: int,
+    card,
+    *,
+    inherit_from: Creature | None = None,
+    entering_attacking: bool = False,
+) -> Creature:
+    """Create a battle-zone entry inheriting state from *inherit_from* (701.26a)."""
+    creature = Creature(
+        definition=card.definition,
+        uid=card.uid,
+        controller=player,
+        owner=getattr(card, "owner", player),
+        entered_turn=state.turn_number,
+        has_summoning_sickness=False if entering_attacking else True,
+    )
+    if inherit_from is not None:
+        creature.is_tapped = inherit_from.is_tapped
+        creature.has_summoning_sickness = inherit_from.has_summoning_sickness
+        creature.has_attacked_this_turn = inherit_from.has_attacked_this_turn
+    if card.definition.card_type == CardType.FIELD:
+        creature.field_orientation = getattr(inherit_from, "field_orientation", "upright") if inherit_from else "upright"
+    creature.apply_static_effects(state)
+    return creature
+
+
+def _add_card_to_zone(
+    state: GameState,
+    player: int,
+    zone_name: str,
+    card,
+    *,
+    inherit_from: Creature | None = None,
+    entering_attacking: bool = False,
+) -> Creature | None:
+    p_state = state.players[player]
+    if zone_name == "hand":
+        p_state.hand.append(HandCard(definition=card.definition, uid=card.uid))
+        return None
+    if zone_name == "battle_zone":
+        if isinstance(card, Creature):
+            creature = card
+            if inherit_from is not None:
+                creature.is_tapped = inherit_from.is_tapped
+                creature.has_summoning_sickness = inherit_from.has_summoning_sickness
+                creature.has_attacked_this_turn = inherit_from.has_attacked_this_turn
+            if entering_attacking:
+                creature.has_summoning_sickness = False
+            p_state.battle_zone.append(creature)
+            creature.apply_static_effects(state)
+            return creature
+        if not _can_enter_battle_zone(card.definition):
+            return None
+        creature = _creature_entering_battle_zone(
+            state, player, card,
+            inherit_from=inherit_from,
+            entering_attacking=entering_attacking,
+        )
+        p_state.battle_zone.append(creature)
+        return creature
+    if zone_name == "mana_zone":
+        p_state.mana_zone.append(ManaCard.from_charge(card.definition))
+        return None
+    if zone_name == "shield_zone":
+        p_state.shield_zone.append(ShieldCard(definition=card.definition, uid=card.uid))
+        return None
+    if zone_name == "graveyard":
+        from core.zones import GraveyardCard
+        p_state.graveyard.insert(
+            0,
+            GraveyardCard(
+                definition=card.definition,
+                uid=getattr(card, "uid", _new_uid()),
+                died_from="swap_zones",
+                died_on_turn=state.turn_number,
+            ),
+        )
+        return None
+    return None
+
+
+def _validate_paired_swap(
+    p_state,
+    zone_a: str,
+    zone_b: str,
+    card_a,
+    card_b,
+) -> bool:
+    """Rule 701.26b: if either move is illegal, the whole swap fails."""
+    defn_a = card_a.definition
+    defn_b = card_b.definition
+    if zone_b == "battle_zone" and not _can_enter_battle_zone(defn_a):
+        return False
+    if zone_a == "battle_zone" and not _can_enter_battle_zone(defn_b):
+        return False
+    if zone_a == "battle_zone" and isinstance(card_a, Creature) and card_a.is_ignored:
+        return False
+    if zone_b == "battle_zone" and isinstance(card_b, Creature) and card_b.is_ignored:
+        return False
+    return True
+
+
+def _update_attack_context_after_swap(
+    state: GameState,
+    outgoing_uid: str,
+    incoming_uid: str,
+    *,
+    entering_attacking: bool,
+) -> None:
+    if not state.attack_context or not entering_attacking:
+        return
+    if state.attack_context.attacker_uid == outgoing_uid:
+        state.attack_context.attacker_uid = incoming_uid
 
 
 
@@ -114,14 +258,11 @@ def _do_gain_control(state: GameState, controller: int, trigger: PendingTrigger)
 
 def _do_swap_zones(state: GameState, controller: int, trigger: PendingTrigger) -> None:
     """
-    Handle SWAP_ZONES effect: swap cards between zones (Revolution Change).
+    Handle SWAP_ZONES effect: swap cards between zones (Revolution Change / J-Change).
 
-    Effect value:
-    - from_zone_a: first zone (e.g., "hand", "battle_zone")
-    - from_zone_b: second zone
-    - card_uid_a: UID of card in first zone
-    - card_uid_b: UID of card in second zone (optional, if swapping specific cards)
-    - target_player: player whose zones to swap (default: controller)
+    Rule 701.26a: swapped-in BZ creature inherits orientation/state of swapped-out.
+    Revolution Change / J-Change entrants are attacking.
+    Rule 701.26b: if either movement fails, neither card moves.
     """
     data = _trigger_data(trigger)
     effect = _effect_value(trigger)
@@ -130,76 +271,65 @@ def _do_swap_zones(state: GameState, controller: int, trigger: PendingTrigger) -
     card_uid_a = data.get("card_uid_a") or effect.get("card_uid_a")
     card_uid_b = data.get("card_uid_b") or effect.get("card_uid_b")
     target_player = effect.get("target_player", controller)
+    swap_type = effect.get("swap_type", "normal")
+    entering_attacking = swap_type in ("revolution_change", "j_change")
 
     if not from_zone_a or not from_zone_b or not card_uid_a:
         return
 
     p_state = state.players[target_player]
 
-    # Get the two cards
-    zone_a = getattr(p_state, from_zone_a, None)
-    zone_b = getattr(p_state, from_zone_b, None)
-    if zone_a is None or zone_b is None:
-        return
-
-    card_a = None
-    for c in zone_a:
-        if getattr(c, "uid", None) == card_uid_a:
-            card_a = c
-            break
+    card_a = _find_in_zone(p_state, from_zone_a, card_uid_a)
     if not card_a:
         return
 
     card_b = None
     if card_uid_b:
-        for c in zone_b:
-            if getattr(c, "uid", None) == card_uid_b:
-                card_b = c
-                break
-    else:
-        # If no specific card_b, pick first valid card in zone_b
+        card_b = _find_in_zone(p_state, from_zone_b, card_uid_b)
+    elif from_zone_b == "battle_zone" and state.attack_context:
+        # Revolution Change during attack: swap with the attacking creature
+        card_b = p_state.find_creature(state.attack_context.attacker_uid)
+    elif getattr(p_state, from_zone_b, None):
+        zone_b = getattr(p_state, from_zone_b)
         if zone_b:
             card_b = zone_b[0]
 
     if not card_b:
         return
 
-    # Perform the swap
+    if not _validate_paired_swap(p_state, from_zone_a, from_zone_b, card_a, card_b):
+        return  # Rule 701.26b
+
+    inherit_for_a = card_b if isinstance(card_b, Creature) else None
+    inherit_for_b = card_a if isinstance(card_a, Creature) else None
+    outgoing_bz_uid = card_b.uid if from_zone_b == "battle_zone" and isinstance(card_b, Creature) else None
+
+    zone_a = getattr(p_state, from_zone_a)
+    zone_b = getattr(p_state, from_zone_b)
     zone_a.remove(card_a)
     zone_b.remove(card_b)
 
-    # Add to opposite zones
-    if from_zone_b == "battle_zone" and isinstance(card_b, Creature):
-        state.global_effects.remove_by_source(card_b.uid)
     if from_zone_a == "battle_zone" and isinstance(card_a, Creature):
-        state.global_effects.remove_by_source(card_a.uid)
+        _remove_global_effects_for_creature(state, card_a)
+    if from_zone_b == "battle_zone" and isinstance(card_b, Creature):
+        _remove_global_effects_for_creature(state, card_b)
 
-    # Convert to appropriate zone types
-    def _add_to_zone(state, player_idx, zone_name, card_def, uid):
-        p = state.players[player_idx]
-        if zone_name == "hand":
-            p.hand.append(HandCard(definition=card_def, uid=uid))
-        elif zone_name == "battle_zone":
-            if isinstance(card_def, CardDefinition):
-                p.battle_zone.append(
-                    Creature(
-                        definition=card_def,
-                        uid=uid,
-                        controller=player_idx,
-                        owner=player_idx,
-                        entered_turn=state.turn_number,
-                        has_summoning_sickness=True,
-                    )
-                )
-        elif zone_name == "mana_zone":
-            p.mana_zone.append(ManaCard.from_charge(card_def))
-        elif zone_name == "shield_zone":
-            p.shield_zone.append(ShieldCard(definition=card_def, uid=uid))
-        elif zone_name == "graveyard":
-            p.graveyard.insert(0, card_def)
+    incoming = _add_card_to_zone(
+        state, target_player, from_zone_b, card_a,
+        inherit_from=inherit_for_a,
+        entering_attacking=entering_attacking and from_zone_b == "battle_zone",
+    )
+    _add_card_to_zone(
+        state, target_player, from_zone_a, card_b,
+        inherit_from=inherit_for_b,
+        entering_attacking=False,
+    )
 
-    _add_to_zone(state, target_player, from_zone_b, card_a.definition, card_a.uid)
-    _add_to_zone(state, target_player, from_zone_a, card_b.definition, card_b.uid)
+    if incoming and outgoing_bz_uid:
+        _update_attack_context_after_swap(
+            state, outgoing_bz_uid, incoming.uid,
+            entering_attacking=entering_attacking,
+        )
 
 
 
@@ -208,76 +338,57 @@ def _do_turn_upside_down(state: GameState, controller: int, trigger: PendingTrig
     Handle TURN_UPSIDE_DOWN effect: flip a Field card upside down (Rule 701.28).
 
     Effect value:
-    - field_uid: UID of the Field card in the field zone
+    - field_uid: UID of the Field creature in the battle zone
     """
     data = _trigger_data(trigger)
     effect = _effect_value(trigger)
     field_uid = data.get("field_uid") or effect.get("field_uid")
+    target_player = effect.get("target_player", controller)
     if not field_uid:
         return
 
-    p_state = state.players[controller]
-    for idx, field_def in enumerate(p_state.field_zone):
-        if getattr(field_def, "uid", None) == field_uid or getattr(field_def, "id", None) == field_uid:
-            # Flip the field - replace with its flipped face if available
-            if hasattr(field_def, "flipped_definition") and field_def.flipped_definition:
-                p_state.field_zone[idx] = field_def.flipped_definition
-            else:
-                # Mark as flipped for visual/logic purposes
-                field_def.flipped = not getattr(field_def, "flipped", False)
-            break
+    for creature in state.players[target_player].battle_zone:
+        if creature.uid != field_uid or not creature.is_field():
+            continue
+        creature.field_orientation = (
+            "upright" if creature.field_orientation == "upside_down" else "upside_down"
+        )
+        break
 
 
 
 def _do_shieldify(state: GameState, controller: int, trigger: PendingTrigger) -> None:
     """
-    Handle SHIELDIFY effect: turn a card into a face-down shield.
-    
+    Handle SHIELDIFY effect (Rule 701.32).
+
     Effect value:
     - from_zone: "hand" (default) or "deck"
-    - card_uid: specific card to shieldify (optional, otherwise random)
-    - target_player: 0 or 1 (who gets the shield, default: controller)
+    - face_up: bool — False = face-down shield (701.32a), True = face-up (701.32b)
+    - card_uid / card_uids: specific card(s) to shieldify
+    - count: number of cards when no uid specified (deck top / random hand)
+    - target_player: who receives the shield (default: controller)
     """
+    from engine.special_cards.shieldify import perform_shieldify
+
     data = _trigger_data(trigger)
     effect = _effect_value(trigger)
     from_zone = effect.get("from_zone", "hand")
     target_player = effect.get("target_player", controller)
+    face_up = bool(effect.get("face_up", False))
+    count = int(effect.get("count", 1))
     card_uid = data.get("card_uid") or effect.get("card_uid")
-    
-    p_state = state.players[controller]
-    target_p_state = state.players[target_player]
-    
-    if from_zone == "hand":
-        if card_uid:
-            # Find specific card
-            hand_card = p_state.find_in_hand(card_uid)
-            if not hand_card:
-                return
-            p_state.hand.remove(hand_card)
-            target_p_state.shield_zone.append(ShieldCard(definition=hand_card.definition, uid=hand_card.uid))
-        else:
-            # Random card from hand
-            if not p_state.hand:
-                return
-            hand_card = random.choice(p_state.hand)
-            p_state.hand.remove(hand_card)
-            target_p_state.shield_zone.append(ShieldCard(definition=hand_card.definition, uid=hand_card.uid))
-    
-    elif from_zone == "deck":
-        deck = p_state.deck
-        if not deck:
-            return
-        if card_uid:
-            # Find specific card in deck
-            for i, defn in enumerate(deck):
-                if defn.id == card_uid or (hasattr(defn, 'uid') and defn.uid == card_uid):
-                    definition = deck.pop(i)
-                    target_p_state.shield_zone.append(ShieldCard(definition=definition))
-                    break
-        else:
-            # Top card of deck
-            definition = deck.pop(0)
-            target_p_state.shield_zone.append(ShieldCard(definition=definition))
+    card_uids = list(data.get("card_uids") or effect.get("card_uids") or [])
+
+    perform_shieldify(
+        state,
+        controller,
+        from_zone=from_zone,
+        target_player=target_player,
+        card_uid=card_uid,
+        card_uids=card_uids or None,
+        face_up=face_up,
+        count=count,
+    )
 
 
 
