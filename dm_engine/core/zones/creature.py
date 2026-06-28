@@ -256,6 +256,18 @@ class Creature:
             if g_bonus > 0:
                 modifiers.append((g_bonus, CalculationOp.ADDITION))
 
+        # ── POWER_ATTACKER (rule 112.3g): +N power when attacking ──────────────
+        # Set by action_executor when attack is declared; cleared end of turn
+        if self.temp_flags.get("power_attacker_active"):
+            for effect in self.definition.effects:
+                if effect.effect_action == EffectAction.POWER_ATTACKER:
+                    try:
+                        amount = int(effect.effect_value.get("amount", 0))
+                    except (ValueError, TypeError):
+                        amount = 0
+                    if amount:
+                        modifiers.append((amount, CalculationOp.ADDITION))
+
         base = calculate_dm(self.base_power, modifiers)
 
         # ── Layer 7 power modifiers (Rule 613) ──────────────────────────────────
@@ -410,6 +422,8 @@ class Creature:
         return True
 
     def can_attack_players(self) -> bool:
+        if self.has_keyword(Keyword.CANNOT_ATTACK_PLAYERS):
+            return False
         return not self.temp_flags.get("cannot_attack_players", False)
 
     def can_be_blocked(self) -> bool:
@@ -438,9 +452,24 @@ class Creature:
         self.temp_flags.pop(flag, None)
 
     def clear_eot_flags(self) -> None:
-        """Clear all temporary flags that expire end of turn."""
-        eot_flags = {"cannot_attack", "cannot_be_blocked", "cannot_be_destroyed",
-                     "cannot_attack_players", "power_attacker_active"}
+        """
+        Clear all temporary flags that expire end of turn (rule 512.1).
+        
+        Includes:
+        - Combat restrictions (cannot_attack, cannot_be_blocked, cannot_be_destroyed, cannot_attack_players)
+        - Mandatory actions (must_attack, must_block, cannot_block) — rule 506.1b / 507.1b
+        - Protection (when duration is until_end_of_turn) — rule 701 / TODO 11
+        - Power attacker active flag
+        - Gained control: revert controller + owner if duration is until_end_of_turn (TODO 11)
+        """
+        eot_flags = {
+            "cannot_attack", "cannot_be_blocked", "cannot_be_destroyed",
+            "cannot_attack_players", "power_attacker_active",
+            # Tier 3 additions
+            "must_attack", "must_block", "cannot_block",
+            "protection",  # protection itself; _until_end_of_turn variants handled separately
+            "over_drive_used",
+        }
         for flag in list(self.temp_flags):
             if flag in eot_flags:
                 del self.temp_flags[flag]
@@ -451,6 +480,37 @@ class Creature:
             m for m in self.power_modifiers
             if m.duration != "until_end_of_turn"
         ]
+
+    def revert_gained_control_if_eot(self) -> tuple[bool, int, int] | None:
+        """
+        If this creature has gained_control with until_end_of_turn duration, revert it.
+        
+        Returns (was_reverted, original_controller, original_owner) or None if not reverted.
+        Caller must move creature back to original player's battle zone and restore effects.
+        
+        Rule: gained control expires at end of turn (standard unless effect says "permanent").
+        """
+        gained_control_info = self.temp_flags.get("gained_control")
+        if not gained_control_info or not isinstance(gained_control_info, dict):
+            return None
+        
+        duration = gained_control_info.get("duration", "until_end_of_turn")
+        if duration != "until_end_of_turn":
+            # "permanent" control effects survive EOT
+            return None
+        
+        original_controller = gained_control_info.get("original_controller")
+        if original_controller is None:
+            return None
+        
+        # Revert controller and owner
+        self.controller = original_controller
+        self.owner = original_controller
+        
+        # Clear the gained_control flag
+        self.temp_flags.pop("gained_control", None)
+        
+        return (True, original_controller, original_controller)
 
     def tap(self) -> None:
         self.is_tapped = True
@@ -679,6 +739,36 @@ class Creature:
                     grant_to_civ=filter_civ,
                     grant_to_race=filter_race,
                     grant_to_controller=self.controller if target_scope == "own" else None,
+                )
+                game_state.global_effects.add(eff)
+
+            elif action == EffectAction.COST_REDUCE:
+                # e.g. "Your spells cost 1 less to cast"
+                amount = value.get("amount", 0)
+                target_scope = target.get("scope", "own")
+                eff = GlobalEffect(
+                    effect_type=GlobalEffectType.COST_REDUCE,
+                    applied_by_uid=self.uid,
+                    applied_by_card=self.id,
+                    controller=self.controller,
+                    target_player=self.controller if target_scope == "own" else (None if target_scope == "all" else 1 - self.controller),
+                    duration="while_in_play",
+                    cost_mod_amount=amount,
+                )
+                game_state.global_effects.add(eff)
+
+            elif action == EffectAction.COST_INCREASE:
+                # e.g. "Your opponent's spells cost 1 more to cast"
+                amount = value.get("amount", 0)
+                target_scope = target.get("scope", "opponent")
+                eff = GlobalEffect(
+                    effect_type=GlobalEffectType.COST_INCREASE,
+                    applied_by_uid=self.uid,
+                    applied_by_card=self.id,
+                    controller=self.controller,
+                    target_player=self.controller if target_scope == "own" else (None if target_scope == "all" else 1 - self.controller),
+                    duration="while_in_play",
+                    cost_mod_amount=amount,
                 )
                 game_state.global_effects.add(eff)
 

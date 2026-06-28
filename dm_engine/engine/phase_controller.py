@@ -96,7 +96,31 @@ def _end_turn(state: GameState) -> None:
         state.global_effects.remove_by_source(creature.uid)
         p_state.graveyard.append(creature.definition)
     
+    # ── Expire end-of-turn effects for active player ─────────────────────────
     p_state.expire_eot_effects()
+    
+    # ── Expire gained_control effects for BOTH players ──────────────────────
+    # (Protection and mandatory actions affect both sides; gained_control can cross)
+    for other_player_idx in (0, 1):
+        other_p_state = state.players[other_player_idx]
+        creatures_to_move = []
+        
+        for creature in list(other_p_state.battle_zone):
+            revert_result = creature.revert_gained_control_if_eot()
+            if revert_result:
+                was_reverted, original_controller, _ = revert_result
+                if was_reverted and original_controller != other_player_idx:
+                    # Move back to original controller's BZ
+                    creatures_to_move.append((creature, original_controller))
+        
+        # Execute moves after iteration to avoid mid-loop mutation
+        for creature, target_player in creatures_to_move:
+            other_p_state.battle_zone.remove(creature)
+            state.players[target_player].battle_zone.append(creature)
+            # Restore static effects for the original controller
+            creature.apply_static_effects(state)
+    
+    # ── Global effect expiry ───────────────────────────────────────────────────
     state.global_effects.expire_eot()
     state.attack_context = None
 

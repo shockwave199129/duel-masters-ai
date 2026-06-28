@@ -49,6 +49,10 @@ class PlayerState:
     detached_castles: list[CardDefinition] = field(default_factory=list)
 
     # Field zone: Field cards deployed by DEPLOY_FIELD effects (rule 308, 701.27)
+    # Field zone — DEPRECATED (see TODO 10 step 1 plan)
+    # Fields now enter battle zone as Creature objects (rule 308.2).
+    # This field is kept for backward compat but is not used by gameplay.
+    # Refer to `battle_zone` for active Field creatures.
     field_zone:      list[CardDefinition] = field(default_factory=list)
 
     # ── Extra zones (rule 407, 408) ───────────────────────────────────────────
@@ -241,10 +245,19 @@ class PlayerState:
             creature.clear_summoning_sickness()
 
     def expire_eot_effects(self) -> None:
-        """Clean up until-end-of-turn effects on all creatures."""
+        """
+        Clean up until-end-of-turn effects on all creatures.
+        This is normally called at END_OF_TURN phase for the active player's creatures.
+        However, gained_control effects can revert across both players' battle zones,
+        so this must be careful about creature movement.
+        
+        Note: after gained_control revert, the creature may need to be moved back to
+        original player's BZ by the caller (phase_controller).
+        """
         for creature in self.battle_zone:
             creature.remove_eot_power_modifiers()
             creature.clear_eot_flags()
+            # Note: gained_control revert is handled in phase_controller after both players
 
     # ── Deck composition tracking ─────────────────────────────────────────────
 
