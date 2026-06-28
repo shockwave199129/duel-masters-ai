@@ -89,6 +89,9 @@ def _do_neo_evolve(state: GameState, controller: int, trigger: PendingTrigger) -
     
     A NEO creature in the battle zone activates its evolution ability
     to place a new evolution stack entry (evolve in place).
+    
+    Rule 802.3: A creature placed via NEO Evolution ability is treated as
+    having summoning sickness exemption for the rest of the turn it was placed.
     """
     data = _trigger_data(trigger)
     creature_uid = data.get("source_uid") or data.get("creature_uid")
@@ -107,7 +110,15 @@ def _do_neo_evolve(state: GameState, controller: int, trigger: PendingTrigger) -
         for hc in p_state.hand:
             if hc.uid == evolve_card_uid:
                 p_state.hand.remove(hc)
-                creature.evolution_stack.append(hc.definition)
+                from core.zones.creature import EvolutionStackEntry
+                entry = EvolutionStackEntry(
+                    definition=hc.definition,
+                    uid=hc.uid,
+                    owner=controller,
+                    entered_turn=state.turn_number,
+                    neo_evolution_placed=True,  # Rule 802.3: NEO Evolution placement
+                )
+                creature.evolution_stack.append(entry)
                 break
 
 

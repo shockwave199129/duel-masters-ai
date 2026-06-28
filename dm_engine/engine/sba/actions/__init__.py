@@ -13,3 +13,5 @@ from .standalone_weapon import _sba_standalone_weapon
 from .dream_rare import _sba_dream_rare_uniqueness
 from .duel_mate_cleanup import _sba_duel_mate_cleanup
 from .g_castle import _sba_g_castle_shield
+from .cannot_attack import _sba_cannot_attack_tap
+from .standalone_cross_gear import _sba_cross_gear_detach

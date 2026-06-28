@@ -26,39 +26,32 @@ def swap_hyper_mode(creature: Creature) -> Creature:
         return creature
 
     old_def = creature.definition
-    from core.cards import CardDefinition as _CD
-    new_def = _CD(
-        id=old_def.other_face_id,
-        slug=old_def.slug,
-        name=old_def.name,
-        cost=old_def.cost,
-        power=old_def.power,
-        card_type=old_def.card_type,
-        card_subtype=old_def.card_subtype,
-        civilizations=old_def.civilizations,
-        races=old_def.races,
-        keywords=old_def.keywords,
-        effects=old_def.effects,
-        evolution_source_races=old_def.evolution_source_races,
-        evolution_source_types=old_def.evolution_source_types,
-        is_multiface=old_def.is_multiface,
-        other_face_id=old_def.id,  # point back to the original
-    )
-    creature.definition = new_def
+    from core.cards import get_other_face
+    other_face = get_other_face(old_def, card_db=None)
+    if other_face is not None:
+        creature.definition = other_face
+    else:
+        # Fallback: manually clone with swapped face ID
+        from core.cards import CardDefinition as _CD
+        new_def = _CD(
+            id=old_def.other_face_id,
+            slug=old_def.slug,
+            name=old_def.name,
+            cost=old_def.cost,
+            power=old_def.power,
+            card_type=old_def.card_type,
+            card_subtype=old_def.card_subtype,
+            civilizations=old_def.civilizations,
+            races=old_def.races,
+            keywords=old_def.keywords,
+            effects=old_def.effects,
+            evolution_source_races=old_def.evolution_source_races,
+            evolution_source_types=old_def.evolution_source_types,
+            is_multiface=old_def.is_multiface,
+            other_face_id=old_def.id,  # point back to the original
+        )
+        creature.definition = new_def
     creature.hyper_mode_released = True
-    return creature
-
-
-def move_ultra_gr_to_battle(state: GameState, controller: int, creature_uid: str) -> "Creature":
-    """
-    Move an Ultra GR creature face-up into the battle zone (rule 408).
-    Stub — full Ultra GR logic is in development.
-    """
-    p_state = state.players[controller]
-    creature = p_state.find_creature(creature_uid)
-    if creature is None:
-        raise ValueError(f"Ultra GR creature {creature_uid} not found")
-    creature.face = 1
     return creature
 
 

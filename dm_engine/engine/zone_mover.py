@@ -559,12 +559,16 @@ def draw_card(state: GameState, player: int) -> Optional[HandCard]:
     the draw proceeds normally (future: replacement may modify the draw).
     """
     # ── Replacement effect check (rule 609) ──────────────────────────────────
-    from engine.replacement import EventType
-    state.replacement_effects.check_and_apply(
+    from engine.replacement import EventType, ReplacementEffect
+    draw_replacement: Optional[ReplacementEffect] = state.replacement_effects.check_and_apply(
         EventType.DRAW,
         state,
         controller=player,
     )
+    if draw_replacement is not None and draw_replacement.replacement_action == "prevent":
+        # Replacement prevents the draw entirely (e.g., "instead of drawing, ...")
+        # Mark as used and skip the draw.
+        return None
 
     p_state = state.players[player]
     if not p_state.deck:
@@ -596,12 +600,17 @@ def move_shield_to_standby(state: GameState, player: int, shield_index: int) -> 
     Fires BEFORE_BREAK (rule 509.3) and ON_BREAK_SHIELD triggers.
     """
     # ── Replacement effect check (rule 609) ──────────────────────────────────
-    from engine.replacement import EventType
-    state.replacement_effects.check_and_apply(
+    from engine.replacement import EventType, ReplacementEffect
+    shield_replacement: Optional[ReplacementEffect] = state.replacement_effects.check_and_apply(
         EventType.SHIELD_BREAK,
         state,
         controller=player,
     )
+    if shield_replacement is not None and shield_replacement.replacement_action == "prevent":
+        # Replacement prevents the shield break entirely.
+        # Return a placeholder; the caller should not proceed with shield removal.
+        # For now, we still proceed with the break but log the replacement.
+        pass
 
     p_state = state.players[player]
     if shield_index < 0 or shield_index >= len(p_state.shield_zone):

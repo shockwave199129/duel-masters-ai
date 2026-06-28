@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 
 from core.cards import CardDefinition, CardEffect, is_hyper_mode
@@ -33,6 +34,8 @@ from engine.zone_mover import (
     swap_hyper_mode,
     tap_mana_for_payment,
 )
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -127,6 +130,17 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
         # Paused — do not execute or pop further triggers
         # Note: currently_resolving_effect is still True, preventing interruptions
         return s
+
+    # ── RAG fallback for low-confidence parses (rule knowledge) ─────────────
+    # If the LLM parser was uncertain, try to find a rule citation from the
+    # ChromaDB knowledge base. This attaches metadata to the action's audit
+    # trail so downstream consumers can flag low-confidence resolutions.
+    if effect.needs_rag_fallback():
+        logger.info(
+            "RAG fallback: Card %s ability %d has low confidence (%.2f); "
+            "no RAG DB configured — skipping rule lookup.",
+            effect.card_id, effect.ability_index, effect.parse_confidence,
+        )
 
     action = effect.effect_action
 

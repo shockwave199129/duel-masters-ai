@@ -191,6 +191,13 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
         if db is None:
             raise ValueError("COMBINE_KING_CREATURE requires db")
         king_defn = db.require(action.card_id)
+        # Validate combine requirements before executing
+        from engine.special_cards.king_cells import validate_king_combine
+        valid, reason = validate_king_combine(
+            s, action.player, king_defn, list(action.selected_uids)
+        )
+        if not valid:
+            raise ValueError(f"Invalid King Cell combine: {reason}")
         tap_mana_for_payment(s, action.player, action.mana_used)
         creature = combine_king_cells(
             s, action.player, king_defn, list(action.selected_uids)

@@ -45,10 +45,7 @@ class CardEffect:
 
     is_optional:       bool          # player may choose not to use
     is_replacement:    bool          # "instead of X, Y happens"
-    # NOTE: is_replacement is loaded from DB but NOT consumed by the engine.
-    # The engine uses effect_type == EffectType.REPLACEMENT instead (see
-    # CardEffect.is_replacement_effect()). This field is retained for
-    # potential future use or LLM training signals.
+    # Used by is_replacement_effect() alongside effect_type == REPLACEMENT.
 
     active_in_phase:   tuple[str, ...]    # which phases this can fire
     # NOTE: active_in_phase is loaded from DB but NOT currently consumed by
@@ -75,11 +72,12 @@ class CardEffect:
         return self.effect_type == EffectType.ACTIVATED
 
     def is_replacement_effect(self) -> bool:
-        # NOTE: This checks effect_type == EffectType.REPLACEMENT, NOT the
-        # is_replacement boolean field. The is_replacement field is loaded
-        # from DB but not consumed by the engine; it exists for LLM training
-        # signals and potential future use.
-        return self.effect_type == EffectType.REPLACEMENT
+        # Check BOTH the effect_type enum and the is_replacement boolean field.
+        # The boolean is set by the LLM parser; the enum is the engine's
+        # canonical classification. Either being true means this is a
+        # replacement effect (belt-and-suspenders, since the DB loader's
+        # cross-validation log catches mismatches).
+        return self.is_replacement or self.effect_type == EffectType.REPLACEMENT
 
     def needs_rag_fallback(self) -> bool:
         return self.parse_confidence < 0.70
@@ -319,50 +317,6 @@ class CardDefinition:
             )
 
         return tuple(corrected_effects)
-
-
-# ── Zerom helpers (rule 812) ──────────────────────────────────────────────────
-def is_zerom(card_def: CardDefinition) -> bool:
-    """Check if a card is a Zerom (double-sided ritual/creature, rule 812)."""
-    return card_def.card_subtype == CardSubtype.ZEROM
-
-
-def is_zerom_creature(creature: "Creature") -> bool:
-    """Check if a creature is a Zerom that has been flipped to its creature side."""
-    return bool(creature.temp_flags.get("_zerom_flipped"))# ── Star Evolution helpers (rule 813) ──────────────────────────────────────────
-def is_star_evolution(creature: "Creature") -> bool:
-    """Check if a creature is a Star Evolution (rule 813)."""
-    return bool(creature.temp_flags.get("_is_star_evolution", False))
-
-
-# ── Dream Rare helpers (rule 817) ─────────────────────────────────────────────
-def is_dream_rare(card_def: CardDefinition) -> bool:
-    """Check if a card is a Dream Rare (rule 817)."""
-    return card_def.card_subtype == CardSubtype.DREAM
-
-
-# ── Duel Mate helpers (rule 820) ─────────────────────────────────────────────
-def is_duel_mate(card_def: CardDefinition) -> bool:
-    """Check if a card is a Duel Mate (rule 820)."""
-    return card_def.card_subtype == CardSubtype.DUEL_MATE
-
-
-# ── G-Castle helpers (rule 822) ──────────────────────────────────────────────
-def is_g_castle(card_def: CardDefinition) -> bool:
-    """Check if a card is a G-Castle (rule 822)."""
-    return card_def.card_subtype == CardSubtype.G_CASTLE
-
-
-# ── Hyper Soul X helpers (rule 818) — STUB ────────────────────────────────────
-def is_hyper_soul_x(card_def: CardDefinition) -> bool:
-    """Check if a card is a Hyper Soul X (rule 818). STUB: not yet implemented."""
-    return card_def.card_subtype == CardSubtype.HYPER_SOUL_X
-
-
-# ── WD Field helpers (rule 819) — STUB ────────────────────────────────────────
-def is_wd_field(card_def: CardDefinition) -> bool:
-    """Check if a card is a WD Field (rule 819). STUB: not yet implemented."""
-    return card_def.card_subtype == CardSubtype.WD_FIELD
 
 
 # ── Deck Definition ───────────────────────────────────────────────────────────

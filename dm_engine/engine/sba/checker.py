@@ -28,6 +28,8 @@ from engine.sba.actions import (
     _sba_dream_rare_uniqueness,
     _sba_duel_mate_cleanup,
     _sba_g_castle_shield,
+    _sba_cannot_attack_tap,
+    _sba_cross_gear_detach,
 )
 
 
@@ -70,6 +72,12 @@ def _check_once(state: GameState) -> tuple[GameState, bool]:
         any_fired = True
 
     if _sba_g_castle_shield(s):
+        any_fired = True
+
+    if _sba_cannot_attack_tap(s):
+        any_fired = True
+
+    if _sba_cross_gear_detach(s):
         any_fired = True
 
     # Re-evaluate static effects for all creatures in battle zones.

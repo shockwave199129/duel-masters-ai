@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ..enums import Civilization, Keyword, CardSubtype, CDAFormulaType, EffectAction, INFINITY
+from ..enums import Civilization, Keyword, CardSubtype, CDAFormulaType, EffectAction, GlobalEffectType, INFINITY
 
 # Import _new_uid and number_calc
 from .cards import _new_uid
@@ -226,7 +226,8 @@ class Creature:
             # Add global power bonus (e.g. "all your creatures get +2000 power")
             if game_state_ref is not None:
                 total += game_state_ref.global_effects.get_global_power_bonus(self.controller, self.controller)
-            return total
+            # Apply layer 7 power modifiers on top of CDA base (Rule 613)
+            return self._apply_layer_power_modifiers(total, game_state_ref)
 
         # ── Standard power computation (Rule 108.2) ───────────────────────────────
         # Build modifier list with calculation operations
@@ -254,7 +255,56 @@ class Creature:
             g_bonus = game_state_ref.global_effects.get_global_power_bonus(self.controller, self.controller)
             if g_bonus > 0:
                 modifiers.append((g_bonus, CalculationOp.ADDITION))
-        return calculate_dm(self.base_power, modifiers)
+
+        base = calculate_dm(self.base_power, modifiers)
+
+        # ── Layer 7 power modifiers (Rule 613) ──────────────────────────────────
+        # After standard computation, apply layer-ordered power modifications.
+        # Layer 7a fixes override the computed value; Layer 7b modifiers stack on top.
+        return self._apply_layer_power_modifiers(base, game_state_ref)
+
+    def _apply_layer_power_modifiers(self, base_power: int, game_state_ref=None) -> int:
+        """
+        Apply Layer 7 (POWER_TOUGHNESS) effects from the layer system (Rule 613).
+
+        Layer 7a: Fix power effects — override the computed value entirely.
+        Layer 7b: Increment/decrement modifiers — stack in timestamp order.
+
+        If no layer effects are registered, returns base_power unchanged.
+        This makes the layer system a live, deterministic ordering mechanism
+        for power modifications.
+        """
+        if game_state_ref is None:
+            return base_power
+
+        try:
+            from engine.layers import Layer
+            layer_mods = game_state_ref.layer_effects.get_layer_power_modifiers(
+                player=self.controller, controller=self.controller
+            )
+        except (ImportError, AttributeError):
+            return base_power
+
+        if not layer_mods:
+            return base_power
+
+        # Layer 7a: Check for fix effects (highest priority within Layer 7)
+        for layered in layer_mods:
+            eff = layered.effect
+            if eff.effect_type == GlobalEffectType.ALL_CREATURES_POWER_FIX:
+                if eff.target_player is not None and eff.target_player != self.controller:
+                    continue
+                return eff.power_mod_amount
+
+        # Layer 7b: Apply increment/decrement modifiers in timestamp order
+        power = base_power
+        for layered in layer_mods:
+            eff = layered.effect
+            if eff.effect_type == GlobalEffectType.ALL_CREATURES_POWER_MOD:
+                if eff.target_player is not None and eff.target_player != self.controller:
+                    continue
+                power += eff.power_mod_amount
+        return max(power, 0)  # Rule 108.1b: treat negative as 0
 
     def effective_power(self, game_state_ref=None) -> int:
         """
@@ -600,6 +650,13 @@ class Creature:
                 )
                 game_state.global_effects.add(eff)
 
+                # Also register in layer_effects for deterministic ordering (Rule 613)
+                try:
+                    from engine.layers import Layer
+                    game_state.layer_effects.add(eff, Layer.POWER_TOUGHNESS)
+                except (ImportError, AttributeError):
+                    pass
+
             elif action == EffectAction.GIVE_KEYWORD:
                 # e.g. "your creatures gain Blocker"
                 keyword = value.get("keyword")
@@ -659,6 +716,12 @@ class Creature:
             return EventType.DESTROY
         elif te == TriggerEvent.ON_LEAVE_BATTLE_ZONE:
             return EventType.LEAVE_BATTLE_ZONE
+        elif te == TriggerEvent.ON_DRAW:
+            return EventType.DRAW
+        elif te == TriggerEvent.ON_BREAK_SHIELD:
+            return EventType.SHIELD_BREAK
+        elif te == TriggerEvent.BEFORE_BREAK:
+            return EventType.SHIELD_BREAK
         # Other trigger events can be mapped as support expands
         return None
 
@@ -669,11 +732,13 @@ class Creature:
 
         Cleans up:
         - GlobalEffectRegistry (power mods, keyword grants, etc.)
+        - LayerEffectRegistry (rule 613 layered power/keyword effects)
         - ReplacementEffectRegistry (rule 609 replacement effects)
         - TriggerRegistry (triggered effects)
         """
         self.static_effects.clear()
         game_state.global_effects.remove_by_source(self.uid)
+        game_state.layer_effects.remove_by_source(self.uid)
         game_state.replacement_effects.unregister(self.uid)
         game_state.trigger_registry.unregister_source(self.uid)
 

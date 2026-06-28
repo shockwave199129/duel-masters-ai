@@ -23,12 +23,12 @@ def check(name, condition, detail=""):
     print(f"  {(PASS if ok else FAIL)} {name}" + (f" — {detail}" if detail else ""))
 
 
-def card(cid, name, power):
+def card(cid, name, power=1000, card_type=CardType.CREATURE, keywords=frozenset()):
     return CardDefinition(
-        id=cid, slug=name, name=name, cost=1, power=power,
-        card_type=CardType.CREATURE, card_subtype=CardSubtype.NONE,
+        id=cid, slug=name, name=name, cost=1, power=power if card_type == CardType.CREATURE else None,
+        card_type=card_type, card_subtype=CardSubtype.NONE,
         civilizations=frozenset([Civilization.FIRE]), races=frozenset(),
-        keywords=frozenset(), effects=tuple(),
+        keywords=keywords, effects=tuple(),
         evolution_source_races=frozenset(), evolution_source_types=frozenset(),
         is_multiface=False,
     )
@@ -71,6 +71,92 @@ check("Breaking last shield is not direct attack win", after.result == GameResul
 s.attack_context.received_direct_attack = True
 after = check_state_based_actions(s)
 check("Explicit direct attack event wins", after.result == GameResult.PLAYER_0_WINS)
+
+# ── 703.4b: Player with empty deck loses ──────────────────────────────────
+s = bare_state()
+s.players[1].deck = []
+after = check_state_based_actions(s)
+check("703.4b: Empty deck → P0 wins",
+      after.result == GameResult.PLAYER_0_WINS)
+
+# ── 703.4d: Creature that lost battle destroyed ──────────────────────────
+s = bare_state()
+loser = Creature(definition=card(10, "loser", 1000), controller=0)
+loser.temp_flags["lost_battle"] = True
+s.players[0].battle_zone = [loser]
+after = check_state_based_actions(s)
+check("703.4d: Battle loser → destroyed",
+      len(after.players[0].graveyard) == 1 and len(after.players[0].battle_zone) == 0)
+
+# ── 703.4e: Cannot attack → tapped ────────────────────────────────────────
+from core.enums import Keyword
+s = bare_state()
+creat = Creature(
+    definition=card(20, "decrepit", keywords=frozenset({Keyword.CANNOT_ATTACK})),
+    controller=0, is_tapped=False,
+)
+s.players[0].battle_zone = [creat]
+after = check_state_based_actions(s)
+check("703.4e: Cannot attack → tapped",
+      after.players[0].battle_zone[0].is_tapped)
+
+# ── 703.4f: Standalone Cross Gear → destroyed ─────────────────────────────
+s = bare_state()
+gear = Creature(definition=card(30, "lone_blade", card_type=CardType.CROSS_GEAR), controller=0)
+s.players[0].battle_zone = [gear]
+after = check_state_based_actions(s)
+check("703.4f: Standalone Cross Gear → graveyard",
+      len(after.players[0].battle_zone) == 0 and len(after.players[0].graveyard) == 1)
+
+# ── 703.4g: Standalone Cell → graveyard ───────────────────────────────────
+s = bare_state()
+cell = Creature(definition=card(40, "lone_cell", card_type=CardType.CELL), controller=0)
+s.players[0].battle_zone = [cell]
+after = check_state_based_actions(s)
+check("703.4g: Standalone Cell → not in battle zone",
+      len(after.players[0].battle_zone) == 0)
+
+# ── 703.4i: Invalid type (Spell standalone) → graveyard ───────────────────
+s = bare_state()
+spell = Creature(definition=card(50, "lone_spell", card_type=CardType.SPELL), controller=0)
+s.players[0].battle_zone = [spell]
+after = check_state_based_actions(s)
+check("703.4i: Standalone Spell → graveyard",
+      len(after.players[0].battle_zone) == 0 and len(after.players[0].graveyard) == 1)
+
+# ── 703.4m: Standalone Weapon → hyperspatial (not graveyard) ──────────────
+s = bare_state()
+weapon = Creature(definition=card(60, "lone_weapon", card_type=CardType.WEAPON), controller=0)
+s.players[0].battle_zone = [weapon]
+after = check_state_based_actions(s)
+check("703.4m: Standalone Weapon → not in battle zone",
+      len(after.players[0].battle_zone) == 0)
+
+# ── 703.4l: D2 Field uniqueness ───────────────────────────────────────────
+s = bare_state()
+d2_field = CardDefinition(
+    id=70, slug="d2_field_1", name="D2 Field", cost=0, power=None,
+    card_type=CardType.FIELD, card_subtype=CardSubtype.D2,
+    civilizations=frozenset(), races=frozenset(), keywords=frozenset(),
+    effects=tuple(), evolution_source_races=frozenset(),
+    evolution_source_types=frozenset(), is_multiface=False,
+)
+f1 = Creature(definition=d2_field, controller=0)
+f2 = Creature(definition=card(71, "d2_field_2", card_type=CardType.FIELD), controller=0)
+f2.definition = CardDefinition(
+    id=71, slug="d2_field_2", name="D2 Field 2", cost=0, power=None,
+    card_type=CardType.FIELD, card_subtype=CardSubtype.D2,
+    civilizations=frozenset(), races=frozenset(), keywords=frozenset(),
+    effects=tuple(), evolution_source_races=frozenset(),
+    evolution_source_types=frozenset(), is_multiface=False,
+)
+s.players[0].battle_zone = [f1, f2]
+after = check_state_based_actions(s)
+d2_count = len([c for c in after.players[0].battle_zone
+                if c.definition.card_type == CardType.FIELD
+                and c.definition.card_subtype == CardSubtype.D2])
+check("703.4l: D2 Field uniqueness: only 1 remains",
+      d2_count == 1, f"got {d2_count}")
 
 passed = sum(1 for _, ok, _ in results if ok)
 failed = len(results) - passed
