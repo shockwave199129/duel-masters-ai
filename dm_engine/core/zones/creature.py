@@ -1,0 +1,711 @@
+"""core/zones/creature.py — Creature, PowerModifier, EvolutionStackEntry."""
+
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Optional
+
+from ..enums import Civilization, Keyword, CardSubtype, CDAFormulaType, EffectAction, INFINITY
+
+# Import _new_uid and number_calc
+from .cards import _new_uid
+from ..cards import CardDefinition, CardEffect
+from core.number_calc import CalculationOp, calculate_dm
+
+
+# ── Power Modifier ────────────────────────────────────────────────────────────
+
+
+@dataclass
+class PowerModifier:
+    """
+    A single power modification on a creature.
+    Tracks source so it can be removed when source leaves play,
+    and duration so it expires at the right time.
+    """
+    source_uid:    str            # uid of the card that granted this
+    amount:        int            # positive = buff, negative = debuff
+    duration:      str            # "permanent" | "until_end_of_turn" | "while_in_play"
+    is_per_card:   bool = False   # True for "Power Attacker +1000 per fire card"
+    per_card_zone: Optional[str] = None   # zone to count (e.g. "mana_zone")
+    per_card_civ:  Optional[Civilization] = None  # civilization filter
+    calc_op:       CalculationOp = CalculationOp.ADDITION  # rule 108.2 operation type
+
+    def __repr__(self) -> str:
+        sign = "+" if self.amount >= 0 else ""
+        return f"<PowerMod:{sign}{self.amount} [{self.duration}] from:{self.source_uid}>"
+
+
+# ── Evolution Stack Entry ──────────────────────────────────────────────────────
+
+@dataclass
+class EvolutionStackEntry:
+    """
+    A single card in an evolution stack (rule 801).
+    Stores card identity (uid + definition) and context needed for reconstruction.
+
+    When an evolution creature is built:
+      - The top card (newest) is stored in Creature.definition + Creature.uid
+      - Previous cards are pushed into evolution_base as EvolutionStackEntry
+      - Index 0 = card directly underneath, last = bottom of stack
+
+    IMPORTANT (rule 801.2): The Creature object is the same creature, even after evolution.
+    The uid remains the same. Only definition changes at the top.
+
+    For reconstruction (rule 801.4), if the top card leaves:
+      - Check next entry: if it can exist standalone, promote it to top
+      - Apply rule 801.4c: no re-entry, inherit effects, no new summoning sickness
+        (unless under-card was placed via NEO ability same turn — rule 802.3)
+      - Apply rule 801.4d: orientation matches the leaving creature
+    """
+    definition:            CardDefinition
+    uid:                   str  = field(default_factory=_new_uid)
+    owner:                 int  = 0              # usually same as creature owner
+    entered_turn:          int  = 0              # turn this card entered evolution stack
+    neo_evolution_placed:  bool = False          # True if placed via NEO Evolution ability (rule 802.3)
+
+    def __repr__(self) -> str:
+        return f"<EvolutionEntry:{self.definition.name}[{self.uid}]>"
+
+
+# ── Creature (Battle Zone Card) ───────────────────────────────────────────────
+
+@dataclass
+class Creature:
+    """
+    A creature card in the battle zone.
+    This is the most complex zone object — tracks all in-play state.
+
+    IMPORTANT: current_power is NOT stored here. It is always computed
+    fresh from base_power + active modifiers. This prevents stale values.
+    """
+    definition:          CardDefinition
+    uid:                 str  = field(default_factory=_new_uid)
+
+    # Tap state
+    is_tapped:           bool = False
+
+    # Summoning sickness — can't attack until next turn (unless Speed Attacker)
+    has_summoning_sickness: bool = True
+    entered_turn:        int  = 0     # which turn it entered play
+
+    # Power modifications active on this creature
+    power_modifiers:     list[PowerModifier] = field(default_factory=list)
+
+    # Evolution stack — cards underneath this creature (rule 801)
+    # Index 0 = directly underneath, last = bottom of stack
+    # Stores EvolutionStackEntry for full card identity + context
+    evolution_stack:     list[EvolutionStackEntry] = field(default_factory=list)
+
+    # Attached cards (cross gear, aura effects)
+    attached_cards:      list[CardDefinition] = field(default_factory=list)
+
+    # Temporary boolean flags set by effects
+    # e.g. "cannot_attack", "cannot_be_blocked", "cannot_be_destroyed"
+    temp_flags:          dict[str, bool] = field(default_factory=dict)
+
+    # Tracks whether this creature attacked this turn (for once-per-turn checks)
+    has_attacked_this_turn: bool = False
+
+    # For "on_block" tracking
+    is_blocking:         bool = False
+    blocking_uid:        Optional[str] = None   # uid of creature it's blocking
+
+    # Hyper Mode (rule 816)
+    hyper_mode_released: bool = False
+
+    # Sealed state (rule 116.2) — creature with seal is "ignored"
+    # ignored = cannot attack/block, no abilities, cannot be chosen, doesn't tap/untap
+    seals:               list = field(default_factory=list)  # list[CardDefinition] face-down
+
+    @property
+    def is_ignored(self) -> bool:
+        """Rule 116.2: a creature with any seal attached is ignored."""
+        return len(self.seals) > 0
+
+    # God linking (rule 804) — component cards of a linked God
+    linked_cards:        list = field(default_factory=list)  # list[CardDefinition]
+
+    # Psychic / Dragheart double-face state (rules 805, 807)
+    # face = 0: lower-cost face (default); face = 1: awakened/creature face
+    # Preserved through flips per rule 805.5 / 807 (same creature object, uid unchanged)
+    face:                int = 0
+
+    # Psychic Super / Dragheart Super cell tracking (rules 806, 808)
+    is_psychic_cell:     bool = False        # True when this is part of a linked Super Creature
+    linked_cells:        list["Creature"] = field(default_factory=list)  # component cells for Super Creatures
+
+    # King Cell combine tracking (rule 814)
+    is_king_cell:        bool = False        # True when part of a combined King Creature
+
+    # Twinpact face selection (Rule 810.3) — which face was chosen at summon time
+    twinpact_face:       int = 0
+
+    # Static ability tracking — which CardEffect refs are currently applied
+    static_effects:      list = field(default_factory=list)  # list[CardEffect] currently active
+
+    # Controller — usually the owner but can change with some effects
+    controller:          int = 0   # player index (0 or 1)
+    owner:               int = 0   # who owns the card (for "return to owner's hand")
+
+    # ── Properties ────────────────────────────────────────────────────────────
+
+    @property
+    def id(self) -> int:
+        return self.definition.id
+
+    @property
+    def name(self) -> str:
+        return self.definition.name
+
+    @property
+    def base_power(self) -> int:
+        return self.definition.power or 0
+
+    @property
+    def civilizations(self) -> frozenset[Civilization]:
+        # Rule 806.1f / 808.1e: Psychic/Dragheart Cells carry the full Super Creature's civilizations.
+        # When part of a Super Creature, return the civilizations of all constituent cells combined.
+        if self.is_psychic_cell and self.linked_cells:
+            civs = set()
+            for cell in self.linked_cells:
+                civs.update(cell.definition.civilizations)
+            return frozenset(civs)
+        return self.definition.civilizations
+
+    @property
+    def races(self) -> frozenset[str]:
+        """Effective races — includes races from evolution base if relevant."""
+        return self.definition.races
+
+    def compute_power(self, game_state_ref=None) -> int:
+        """
+        Always call this to get current power. Never cache.
+        game_state_ref needed for per-card modifiers (Power Attacker) and CDA formulas.
+        
+        Rule 108.1c: ∞ power is treated as larger than any finite number.
+        If a creature has ∞ power and receives -∞, it is destroyed.
+        """
+        # ── Infinity power check (Rule 108.1c) ─────────────────────────────────
+        # Check for -∞ modifier first (destroys creature)
+        for mod in self.power_modifiers:
+            if mod.amount == -INFINITY:
+                return -INFINITY  # sentinel for "should be destroyed"
+        
+        if self.definition.is_infinite_power:
+            return INFINITY
+
+        # ── Power fix (from POWER_FIX effect action) ──────────────────────────────
+        # Highest priority — overrides everything including CDA
+        fixed_power = self.temp_flags.get("_power_fix")
+        if fixed_power is not None:
+            return int(fixed_power)
+
+        # ── Global power fix (ALL_CREATURES_POWER_FIX) ────────────────────────────
+        # Same priority as per-card power fix — overrides CDA and standard computation
+        if game_state_ref is not None:
+            global_fix = game_state_ref.global_effects.get_all_creatures_power_fix(self.controller)
+            if global_fix is not None:
+                return global_fix
+
+        # ── CDA (Characteristic-Defining Ability) ────────────────────────────────
+        cda = self.definition.cda_formula_type
+        if cda != CDAFormulaType.NONE:
+            cda_base = self._compute_cda_power(game_state_ref)
+            # CDA base replaces printed base_power; power_modifiers still apply on top
+            total = cda_base
+            for mod in self.power_modifiers:
+                if mod.is_per_card and game_state_ref is not None:
+                    count = game_state_ref.count_cards_in_zone(
+                        player=self.controller,
+                        zone=mod.per_card_zone,
+                        civilization=mod.per_card_civ
+                    )
+                    total += mod.amount * count
+                else:
+                    total += mod.amount
+            # Add global power bonus (e.g. "all your creatures get +2000 power")
+            if game_state_ref is not None:
+                total += game_state_ref.global_effects.get_global_power_bonus(self.controller, self.controller)
+            return total
+
+        # ── Standard power computation (Rule 108.2) ───────────────────────────────
+        # Build modifier list with calculation operations
+        modifiers: list[tuple[int, CalculationOp]] = []
+        for mod in self.power_modifiers:
+            if mod.is_per_card and game_state_ref is not None:
+                count = game_state_ref.count_cards_in_zone(
+                    player=self.controller,
+                    zone=mod.per_card_zone,
+                    civilization=mod.per_card_civ
+                )
+                modifiers.append((mod.amount * count, mod.calc_op))
+            else:
+                # Negative amounts are treated as subtraction per Rule 108.2
+                if mod.amount < 0:
+                    modifiers.append((abs(mod.amount), CalculationOp.SUBTRACTION))
+                else:
+                    modifiers.append((mod.amount, mod.calc_op))
+        # Add per-card global power bonuses (static aura effects)
+        if game_state_ref is not None:
+            bonus = game_state_ref.global_effects.get_per_card_power_bonus(self)
+            if bonus > 0:
+                modifiers.append((bonus, CalculationOp.ADDITION))
+            # Add global power bonus (e.g. "all creatures get +2000 power")
+            g_bonus = game_state_ref.global_effects.get_global_power_bonus(self.controller, self.controller)
+            if g_bonus > 0:
+                modifiers.append((g_bonus, CalculationOp.ADDITION))
+        return calculate_dm(self.base_power, modifiers)
+
+    def effective_power(self, game_state_ref=None) -> int:
+        """
+        Rule 108.1b: When referencing a creature's power, a negative value
+        is treated as 0. The actual compute_power() can return negative
+        values (so the SBA can detect and destroy the creature), but any
+        caller that is *referencing* the power for comparison, battle, or
+        arithmetic purposes should use this method.
+
+        Examples:
+          - Battle: attacker 5000 vs defender -1000 → defender treated as 0,
+            so attacker wins (and defender is then destroyed by the SBA).
+          - Card effect "choose creatures whose total power equals 11000":
+            a -1000-power creature contributes 0, not -1000.
+        """
+        # -∞ is the explicit "destroyed" sentinel — preserve it
+        actual = self.compute_power(game_state_ref)
+        if actual == -INFINITY:
+            return -INFINITY
+        return max(0, actual)
+
+    def _compute_cda_power(self, game_state_ref=None) -> int:
+        """
+        Compute the CDA base power from the card's CDA formula.
+        Called by compute_power() when cda_formula_type != NONE.
+        """
+        cda = self.definition.cda_formula_type
+
+        if cda == CDAFormulaType.FIXED:
+            return self.definition.cda_fixed_value
+
+        if cda == CDAFormulaType.HAND_COUNT_MULT:
+            if game_state_ref is None:
+                return 0
+            count = game_state_ref.count_cards_in_zone(
+                player=self.controller,
+                zone="hand",
+                civilization=self.definition.cda_filter_civ
+            )
+            return count * self.definition.cda_multiplier
+
+        if cda == CDAFormulaType.BATTLE_ZONE_COUNT_MULT:
+            if game_state_ref is None:
+                return 0
+            count = game_state_ref.count_cards_in_zone(
+                player=self.controller,
+                zone="battle_zone",
+                civilization=self.definition.cda_filter_civ
+            )
+            return count * self.definition.cda_multiplier
+
+        if cda == CDAFormulaType.MANA_COUNT_MULT:
+            if game_state_ref is None:
+                return 0
+            count = game_state_ref.count_cards_in_zone(
+                player=self.controller,
+                zone="mana_zone",
+                civilization=self.definition.cda_filter_civ
+            )
+            return count * self.definition.cda_multiplier
+
+        if cda == CDAFormulaType.SHIELD_COUNT_MULT:
+            if game_state_ref is None:
+                return 0
+            count = game_state_ref.count_cards_in_zone(
+                player=self.controller,
+                zone="shield_zone",
+                civilization=self.definition.cda_filter_civ
+            )
+            return count * self.definition.cda_multiplier
+
+        # Fallback (should not reach here if cda != NONE)
+        return self.base_power
+
+    # ── Keyword checks (delegate to definition + temp flags) ──────────────────
+
+    def has_keyword(self, kw: Keyword) -> bool:
+        return self.definition.has_keyword(kw) or self.temp_flags.get(kw.value, False)
+
+    def can_attack(self) -> bool:
+        if self.is_ignored:          # rule 116.2: ignored creatures cannot attack
+            return False
+        if self.temp_flags.get("cannot_attack", False):
+            return False
+        if self.is_tapped:
+            return False
+
+        # Rule 805.6: Awakened Psychic Creatures have no summoning sickness
+        if self.face == 1 and self.definition.card_subtype == CardSubtype.PSYCHIC:
+            # face=1 indicates awakened Psychic; no sickness check needed
+            return True
+
+        # Rule 808.1a: Dragheart Super Creatures have no summoning sickness
+        if (self.definition.card_subtype == CardSubtype.DRAGHEART 
+            and self.linked_cells):
+            # Dragheart Super Creature (has linked cells); no sickness check needed
+            return True
+
+        # Rule 805.6a: Even if awakened Psychic flips back, it has no sickness if in BZ since turn start
+        # This is already handled by checking face=1 above, but keep the standard sickness check as fallback
+        if self.has_summoning_sickness and not self.has_keyword(Keyword.SPEED_ATTACKER):
+            return False
+        return True
+
+    def can_attack_players(self) -> bool:
+        return not self.temp_flags.get("cannot_attack_players", False)
+
+    def can_be_blocked(self) -> bool:
+        return not (
+            self.has_keyword(Keyword.CANNOT_BE_BLOCKED)
+            or self.temp_flags.get("cannot_be_blocked", False)
+        )
+
+    def can_be_destroyed(self) -> bool:
+        return not self.temp_flags.get("cannot_be_destroyed", False)
+
+    def is_blocker(self) -> bool:
+        """Rule 116.2: ignored creatures cannot block."""
+        return self.has_keyword(Keyword.BLOCKER) and not self.is_ignored
+
+    def is_guardman(self) -> bool:
+        return self.has_keyword(Keyword.GUARDMAN) and not self.is_ignored
+
+    def shields_broken_on_attack(self) -> int:
+        return self.definition.shields_broken()
+
+    def set_flag(self, flag: str, value: bool = True) -> None:
+        self.temp_flags[flag] = value
+
+    def clear_flag(self, flag: str) -> None:
+        self.temp_flags.pop(flag, None)
+
+    def clear_eot_flags(self) -> None:
+        """Clear all temporary flags that expire end of turn."""
+        eot_flags = {"cannot_attack", "cannot_be_blocked", "cannot_be_destroyed",
+                     "cannot_attack_players", "power_attacker_active"}
+        for flag in list(self.temp_flags):
+            if flag in eot_flags:
+                del self.temp_flags[flag]
+
+    def remove_eot_power_modifiers(self) -> None:
+        """Remove power modifiers that expire at end of turn."""
+        self.power_modifiers = [
+            m for m in self.power_modifiers
+            if m.duration != "until_end_of_turn"
+        ]
+
+    def tap(self) -> None:
+        self.is_tapped = True
+
+    def untap(self) -> None:
+        self.is_tapped = False
+
+    def clear_summoning_sickness(self) -> None:
+        self.has_summoning_sickness = False
+
+    # ── Evolution stack helpers (rule 801) ─────────────────────────────────────
+
+    def is_evolution_creature(self) -> bool:
+        """True if this creature has cards stacked underneath it."""
+        return len(self.evolution_stack) > 0
+
+    def get_evolution_base_definitions(self) -> list[CardDefinition]:
+        """
+        Backward-compatibility helper: return all definitions in the evolution stack.
+        Used for rule checks that reference "evolution base card".
+        Rule 200.3a: characteristics of under-cards are ignored during normal gameplay.
+        """
+        return [entry.definition for entry in self.evolution_stack]
+
+    def get_under_card_uids(self) -> list[str]:
+        """Return list of UIDs for all cards in evolution stack (top to bottom)."""
+        return [entry.uid for entry in self.evolution_stack]
+
+    def push_to_evolution_stack(self, entry: EvolutionStackEntry) -> None:
+        """Push a card onto the evolution stack (becomes the new 'directly underneath')."""
+        self.evolution_stack.insert(0, entry)
+
+    def pop_from_evolution_stack(self) -> Optional[EvolutionStackEntry]:
+        """Remove and return the top card from evolution stack, or None if empty."""
+        if self.evolution_stack:
+            return self.evolution_stack.pop(0)
+        return None
+
+    def peek_under_card(self) -> Optional[EvolutionStackEntry]:
+        """Look at the top card in the evolution stack without removing it."""
+        if self.evolution_stack:
+            return self.evolution_stack[0]
+        return None
+
+    def get_all_under_cards(self) -> list[EvolutionStackEntry]:
+        """Return copy of entire evolution stack (for iteration, inspection)."""
+        return list(self.evolution_stack)
+
+    # ── NEO Evolution state helpers (rule 802) ─────────────────────────────────
+
+    def is_neo_evolution_creature(self) -> bool:
+        """
+        Rule 802.2: A NEO Creature is treated as a "NEO Evolution Creature" while it
+        is in the Battle Zone with a card underneath it via the NEO Evolution ability,
+        or while it is attempting to enter the Battle Zone as a NEO Evolution Creature.
+        While in other zones, it is treated as a non-evolution creature.
+        """
+        # Must have the NEO or G-NEO subtype
+        if self.definition.card_subtype not in (CardSubtype.NEO, CardSubtype.G_NEO):
+            return False
+        
+        # Must have an underlying card
+        return self.is_evolution_creature()
+
+    def check_neo_summoning_sickness_recovery(self, current_turn: int) -> bool:
+        """
+        Rule 802.3: If a NEO Creature has a card underneath it, it is treated as a
+        "NEO Evolution Creature" and does not suffer from summoning sickness. However,
+        if the underlying card is removed by some method during the same turn it was
+        played, it is no longer a "NEO Evolution Creature" and cannot attack due to
+        "summoning sickness."
+
+        This helper checks if a NEO creature that lost its underlying card during the
+        same turn it was NEO-evolved should have summoning sickness restored.
+
+        Returns True if summoning sickness should be restored (i.e., the creature was
+        NEO-evolved this turn and now has no underlying card).
+        """
+        # Only applies to NEO creatures
+        if self.definition.card_subtype not in (CardSubtype.NEO, CardSubtype.G_NEO):
+            return False
+        
+        # Must have entered this turn (to check same-turn rule)
+        if self.entered_turn != current_turn:
+            return False
+        
+        # Now has no underlying card
+        if self.is_evolution_creature():
+            return False
+        
+        # Check if there was a NEO-evolution card placed this turn
+        # (This is checked via the temp_flags set when the card was evolved)
+        if self.temp_flags.get("_neo_evolved_this_turn", False):
+            return True
+        
+        return False
+
+    def get_neo_underlying_entry_info(self) -> Optional[tuple[EvolutionStackEntry, bool]]:
+        """
+        Helper to get the current underlying card and whether it was placed via
+        NEO Evolution ability (rule 802.3).
+
+        Rule 802.3: Whether the underlying card was placed via NEO ability matters
+        for determining if summoning sickness applies when it's removed.
+
+        Returns: Tuple of (EvolutionStackEntry, was_placed_via_neo_ability) or None
+        """
+        under_entry = self.peek_under_card()
+        if not under_entry:
+            return None
+        
+        return (under_entry, under_entry.neo_evolution_placed)
+
+    # ── Static ability application ───────────────────────────────────────────────
+
+    def apply_static_effects(self, game_state) -> None:
+        """
+        Read this creature's static effects from its CardDefinition and apply them
+        to the game state. Called when the creature enters the battle zone.
+
+        Handles:
+          - Power modifiers to other creatures (via GlobalEffectRegistry)
+          - Keyword grants to other creatures (via GlobalEffectRegistry)
+          - Registration of per-card global effects
+          - Registration of triggered effects in TriggerRegistry
+
+        NOTE: Phase filtering is applied at entry time. For proper phase-gated
+        static effects (e.g., effects that only work during MAIN phase), the engine
+        would need to re-evaluate static effects on phase changes. This is a
+        partial implementation - effects with active_in_phase restrictions will
+        only be applied if the creature enters during an active phase.
+        """
+        from core.global_effects import GlobalEffect, GlobalEffectType
+        from core.enums import Phase, TriggerEvent
+        from core.cards import CardEffect
+
+        # Inline phase filtering to avoid circular import with engine.action_generator
+        def _effect_active_in_phase(effect, phase: Phase) -> bool:
+            active_phases = effect.active_in_phase
+            if not active_phases:
+                return False
+            if "any" in active_phases:
+                return True
+            phase_name = phase.name.lower()
+            if phase_name in active_phases:
+                return True
+            if phase.is_attack_subphase() and "attack" in active_phases:
+                return True
+            return False
+
+        def _filter_effects_by_phase(effects, phase):
+            return [e for e in effects if _effect_active_in_phase(e, phase)]
+
+        current_phase = game_state.current_phase
+        effects = self.definition.get_static_effects()
+        effects = _filter_effects_by_phase(effects, current_phase)
+
+        # Register triggered effects in the trigger registry
+        # Get ALL triggered effects (not phase-filtered for registration - they'll be filtered at fire time)
+        all_effects = self.definition.get_triggered_effects()
+        for i, card_effect in enumerate(all_effects):
+            if card_effect.trigger_event != TriggerEvent.NONE:
+                game_state.trigger_registry.register(
+                    source_uid=self.uid,
+                    source_card_id=self.id,
+                    ability_index=i,
+                    effect=card_effect,
+                )
+
+        for card_effect in effects:
+            self.static_effects.append(card_effect)
+
+            action = card_effect.effect_action
+            target = card_effect.effect_target
+            value = card_effect.effect_value
+
+            if action == EffectAction.POWER_MODIFY:
+                # e.g. "your other Fire creatures get +1000 power"
+                amount = value.get("amount", 0)
+                filter_civ = target.get("civilization")
+                filter_race = target.get("race")
+                target_scope = target.get("scope", "own")  # "own" | "opponent" | "all"
+                exclude_self = target.get("exclude_self", True)
+
+                eff = GlobalEffect(
+                    effect_type=GlobalEffectType.PER_CARD_POWER_MOD,
+                    applied_by_uid=self.uid,
+                    applied_by_card=self.id,
+                    controller=self.controller,
+                    target_player=None if target_scope == "all" else self.controller,
+                    duration="while_in_play",
+                    power_mod_amount=amount,
+                    power_mod_target=target_scope,
+                    per_card_filter_civ=filter_civ,
+                    per_card_filter_race=filter_race,
+                    per_card_filter_self=exclude_self,
+                )
+                game_state.global_effects.add(eff)
+
+            elif action == EffectAction.GIVE_KEYWORD:
+                # e.g. "your creatures gain Blocker"
+                keyword = value.get("keyword")
+                if keyword is None:
+                    keyword = value.get("granted_keyword")
+                if keyword is None:
+                    continue
+                filter_civ = target.get("civilization")
+                filter_race = target.get("race")
+                target_scope = target.get("scope", "own")
+
+                eff = GlobalEffect(
+                    effect_type=GlobalEffectType.PER_CARD_KEYWORD_GRANT,
+                    applied_by_uid=self.uid,
+                    applied_by_card=self.id,
+                    controller=self.controller,
+                    target_player=None if target_scope == "all" else self.controller,
+                    duration="while_in_play",
+                    grant_keyword=keyword,
+                    grant_to_civ=filter_civ,
+                    grant_to_race=filter_race,
+                    grant_to_controller=self.controller if target_scope == "own" else None,
+                )
+                game_state.global_effects.add(eff)
+
+            elif action == EffectAction.NONE and card_effect.is_replacement_effect():
+                # Replacement effect — register with ReplacementEffectRegistry (rule 609)
+                from engine.replacement import ReplacementEffect, EventType
+
+                # Determine which event type this replacement applies to
+                event_type = self._resolve_replacement_event_type(card_effect)
+                if event_type is not None:
+                    applies_to = card_effect.effect_target.get("scope", "self")
+                    rep = ReplacementEffect(
+                        event_type=event_type,
+                        source_uid=self.uid,
+                        source_card_id=self.id,
+                        controller=self.controller,
+                        condition=card_effect.trigger_condition,
+                        replacement_action=card_effect.effect_value.get("action", "prevent"),
+                        replacement_value=card_effect.effect_value,
+                        applies_to=applies_to,
+                    )
+                    game_state.replacement_effects.register(rep)
+
+    @staticmethod
+    def _resolve_replacement_event_type(card_effect: CardEffect) -> Optional[str]:
+        """
+        Map a replacement CardEffect's trigger_event to an EventType constant.
+        Returns None if the event type is not yet supported.
+        """
+        from engine.replacement import EventType
+        from core.enums import TriggerEvent
+
+        te = card_effect.trigger_event
+        if te == TriggerEvent.ON_DESTROY:
+            return EventType.DESTROY
+        elif te == TriggerEvent.ON_LEAVE_BATTLE_ZONE:
+            return EventType.LEAVE_BATTLE_ZONE
+        # Other trigger events can be mapped as support expands
+        return None
+
+    def remove_static_effects(self, game_state) -> None:
+        """
+        Remove all static effects that this creature has applied to the game state.
+        Called when the creature leaves the battle zone.
+
+        Cleans up:
+        - GlobalEffectRegistry (power mods, keyword grants, etc.)
+        - ReplacementEffectRegistry (rule 609 replacement effects)
+        - TriggerRegistry (triggered effects)
+        """
+        self.static_effects.clear()
+        game_state.global_effects.remove_by_source(self.uid)
+        game_state.replacement_effects.unregister(self.uid)
+        game_state.trigger_registry.unregister_source(self.uid)
+
+    def reapply_static_effects(self, game_state) -> None:
+        """
+        Re-evaluate and re-apply static effects based on the current phase.
+        
+        This is called when the game phase changes, to handle static effects
+        that have phase restrictions (active_in_phase != ("any",)).
+        
+        Only re-applies if the creature has static effects with non-"any" phase restrictions,
+        to avoid unnecessary work for creatures with always-active static effects.
+        """
+        # Check if any static effects have phase restrictions
+        has_phase_restricted = False
+        for effect in self.definition.get_static_effects():
+            active_phases = effect.active_in_phase
+            if active_phases and "any" not in active_phases:
+                has_phase_restricted = True
+                break
+        
+        if not has_phase_restricted:
+            return  # No phase-restricted effects, nothing to re-evaluate
+        
+        # Remove existing static effects and re-apply with current phase
+        self.remove_static_effects(game_state)
+        self.apply_static_effects(game_state)
+
+    def __repr__(self) -> str:
+        state = []
+        if self.is_tapped: state.append("tapped")
+        if self.has_summoning_sickness: state.append("sick")
+        if self.temp_flags: state.append(str(self.temp_flags))
+        state_str = f" ({', '.join(state)})" if state else ""
+        return f"<Creature:{self.definition.name}[{self.uid}] {self.base_power}{state_str}>"

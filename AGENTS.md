@@ -21,7 +21,14 @@ Duel Masters AI toolkit: a Python monorepo for scraping OCG card data, ingesting
 | `rules_ingest/` | Rules markdown parser + DB ingestion |
 | `dm_engine/` | Core game engine, bots, training |
 | `dm_engine/core/` | Game state, cards, enums, actions, zones, player state, global effects |
+| `dm_engine/core/actions/` | Action dataclass + constructor functions (split from core/actions.py) |
+| `dm_engine/core/cards/` | CardDefinition, CardEffect, DeckDefinition + helpers (split from core/cards.py) |
+| `dm_engine/core/zones/` | HandCard, ManaCard, ShieldCard, Creature, etc. (split from core/zones.py) |
 | `dm_engine/engine/` | Action execution, generation, battle/shield/trigger/zone resolvers, phase controller |
+| `dm_engine/engine/turn/` | Phase-specific action generators (split from engine/action_generator.py) |
+| `dm_engine/engine/cards/effect_actions/` | Per-EffectAction handlers (split from engine/effect_executor.py) |
+| `dm_engine/engine/sba/` | State-based action checker + per-SBA modules (split from engine/sba_checker.py) |
+| `dm_engine/engine/special_cards/` | Card-family-specific mechanics (split from engine/zone_mover.py) |
 | `dm_engine/bot/` | RandomBot, NeuralBot, NeuralModel, state/action encoders (v2/v3) |
 | `dm_engine/decks/` | Prebuilt deck definitions and JSON loader |
 | `dm_engine/db/` | Card database interface (PostgreSQL) |
@@ -231,6 +238,20 @@ JSONL lines contain: `game_id`, `step`, `state_tensor`, `legal_actions`, `chosen
 - Tests use inline `check(name, condition, detail)` helper with PASS/FAIL emoji output
 - Module-level constants use `UPPER_SNAKE_CASE`
 - Enums in `dm_engine/core/enums.py` are the single source of truth for game concepts
+
+## Module → Rules Chapter Map
+
+| Module | Rules chapter | Key rules |
+|--------|--------------|-----------|
+| `core/actions/` | Ch 1 (Game Basics) | 101.2, 112.2a, 112.3, 503.1, 506.1, 509.2 |
+| `core/cards/` | Ch 2 (Card Anatomy) | 200.3c, 207, 809, 810, 812, 816-822 |
+| `core/zones/` | Ch 4 (Zones) | 400-410 |
+| `engine/action_generator.py` + `engine/turn/action_gen.py` | Ch 5 (Turn Structure) | 500-512 |
+| `engine/effect_executor.py` + `engine/cards/effect_actions/` | Ch 6 (Spells & Abilities) | 601-609 |
+| `engine/sba/checker.py` + `engine/sba/actions/` | Ch 7 (State-Based Actions) | 703.4 |
+| `engine/zone_mover.py` | Ch 4 (Zones) | 400-410 |
+| `engine/special_cards/` | Ch 8 (Special Cards) | 800-822 |
+
 - Type hints on all public functions; `pyrightconfig.json` sets `extraPaths: ["dm_engine"]`
 - Pylint init-hook adds `dm_engine` to sys.path
 
