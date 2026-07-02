@@ -435,6 +435,37 @@ python dm_engine/scripts/train_action_score.py \
   --epochs 10
 ```
 
+For actor-critic or PPO training on the same JSONL rows:
+
+```bash
+python dm_engine/scripts/train_actor_critic.py \
+  --input data/self_play/gen0_v3_games.jsonl \
+  --output dm_engine/models/gen1_v3_action_critic.pt \
+  --value-target-field blended_target
+
+python dm_engine/scripts/train_ppo.py \
+  --input data/self_play/gen0_v3_games.jsonl \
+  --output dm_engine/models/gen1_v3_ppo.pt
+```
+
+The training pipeline can switch modes with `TRAIN_MODE`:
+
+```bash
+TRAIN_MODE=ppo bash dm_engine/scripts/run_training_pipeline.sh
+TRAIN_MODE=actor_critic bash dm_engine/scripts/run_training_pipeline.sh
+```
+
+Parallel self-play is available with `--workers` and league sampling:
+
+```bash
+python dm_engine/scripts/run_self_play.py \
+  --preset standard \
+  --workers 4 \
+  --bot-p0 neural \
+  --opponent-pool "random,heuristic,neural,current" \
+  --league-dir dm_engine/models/league
+```
+
 Then run the trained model:
 
 ```bash

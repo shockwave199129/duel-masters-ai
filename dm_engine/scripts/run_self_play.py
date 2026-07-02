@@ -16,6 +16,7 @@ if str(DM_ENGINE_ROOT) not in sys.path:
 from db.card_database import CardDatabase
 from rules import RuleKnowledgeService
 from training.self_play import run_self_play_games
+from training.self_play_parallel import run_self_play_games_parallel
 
 logger = logging.getLogger("run_self_play")
 
@@ -54,6 +55,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epsilon", type=float, default=0.05)
     parser.add_argument("--first-player", type=int, choices=[0, 1], default=0)
     parser.add_argument("--model-path", type=Path, default=None)
+    parser.add_argument("--bot-p0", default="neural", help="Bot spec for player 0")
+    parser.add_argument("--bot-p1", default="neural", help="Bot spec for player 1")
+    parser.add_argument(
+        "--opponent-pool",
+        default=None,
+        help="Comma-separated opponent specs to sample for the non-primary seat",
+    )
+    parser.add_argument("--league-dir", type=Path, default=None, help="Directory of historical checkpoints")
+    parser.add_argument("--workers", type=int, default=1, help="Number of worker processes for parallel self-play")
     parser.add_argument("--terminal-weight", type=float, default=0.65, help="Weight for final win/loss when blending with heuristic targets")
     parser.add_argument(
         "--encoder-version",
@@ -105,8 +115,7 @@ def main() -> None:
             chroma_path=str(args.chroma_path) if args.chroma_path is not None else None,
         )
     )
-    summary = run_self_play_games(
-        db=db,
+    run_kwargs = dict(
         deck_json=args.deck_json,
         output_path=args.output,
         games=args.games,
@@ -116,6 +125,10 @@ def main() -> None:
         first_player=args.first_player,
         randomize_seating=not args.fixed_seating,
         model_path=args.model_path,
+        bot_p0=args.bot_p0,
+        bot_p1=args.bot_p1,
+        opponent_pool=args.opponent_pool,
+        league_dir=args.league_dir,
         terminal_weight=args.terminal_weight,
         overwrite=args.overwrite,
         use_database_decks=args.use_db_decks,
@@ -123,8 +136,20 @@ def main() -> None:
         allow_mirror_matches=args.allow_mirror_matches,
         policy_encoder_version=args.encoder_version,
         record_encoder_version=args.record_encoder_version,
-        rule_service=rule_service,
     )
+    if args.workers > 1:
+        summary = run_self_play_games_parallel(
+            dsn=args.dsn,
+            workers=args.workers,
+            shard_dir=PROJECT_ROOT / "data" / "self_play" / "shards",
+            **run_kwargs,
+        )
+    else:
+        summary = run_self_play_games(
+            db=db,
+            rule_service=rule_service,
+            **run_kwargs,
+        )
     logger.info(
         "Self-play done: games=%s decisions=%s p0_wins=%s p1_wins=%s no_winner_terminal=%s unfinished=%s output=%s",
         summary.games,

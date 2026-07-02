@@ -66,8 +66,8 @@ class NeuralBot:
     def choose_from_actions(self, state: GameState, actions: list[Action], db=None) -> Action:
         if not actions:
             raise ValueError("No legal actions available")
-        if self.epsilon > 0.0 and self.rng.random() < self.epsilon:
-            return self.rng.choice(actions)
+        random_branch = self.epsilon > 0.0 and self.rng.random() < self.epsilon
+        random_action = self.rng.choice(actions) if random_branch else None
 
         perspective = actions[0].player
         if self.encoder_version == 2:
@@ -95,7 +95,24 @@ class NeuralBot:
             inputs = torch.tensor(rows, dtype=torch.float32)
             scores = self.model(inputs).squeeze(-1)
             best_index = int(torch.argmax(scores).item())
-        return actions[best_index]
+            policy_probs = torch.softmax(scores, dim=-1)
+
+        selected_action = random_action if random_branch and random_action is not None else actions[best_index]
+        selected_index = actions.index(selected_action)
+        greedy_action = actions[best_index]
+        if random_branch:
+            behavior_prob = self.epsilon / len(actions)
+        elif selected_action is greedy_action:
+            behavior_prob = (1.0 - self.epsilon) + (self.epsilon / len(actions))
+        else:
+            behavior_prob = self.epsilon / len(actions)
+
+        self.last_selected_index = selected_index
+        self.last_was_random = random_branch
+        self.last_policy_log_prob = float(torch.log(policy_probs[selected_index].clamp(min=1e-12)).item())
+        self.last_behavior_log_prob = float(torch.log(torch.tensor(max(behavior_prob, 1e-12))).item())
+        self.last_policy_probs = [float(prob) for prob in policy_probs.tolist()]
+        return selected_action
 
     def score_actions(self, state: GameState, actions: list[Action], db=None) -> list[float]:
         """Return model scores for diagnostics without changing action legality."""

@@ -85,6 +85,34 @@ with tempfile.TemporaryDirectory() as tmp:
     check("Pairwise trainer writes checkpoint", pairwise_output.exists())
     check("Pairwise trainer reports ranking pairs", pairwise_summary.rows == 4)
 
+    blended_output = tmp_path / "blended.pt"
+    blended_summary = train_action_score_model(
+        input_path=data_path,
+        output_path=blended_output,
+        epochs=1,
+        batch_size=2,
+        hidden_size=16,
+        num_blocks=1,
+        dropout=0.0,
+        loss_mode="blended",
+    )
+    check("Blended trainer writes checkpoint", blended_output.exists())
+    check("Blended trainer reports flattened examples", blended_summary.rows == 8)
+
+    distill_output = tmp_path / "distill.pt"
+    distill_summary = train_action_score_model(
+        input_path=data_path,
+        output_path=distill_output,
+        epochs=1,
+        batch_size=2,
+        hidden_size=16,
+        num_blocks=1,
+        dropout=0.0,
+        loss_mode="distillation",
+    )
+    check("Distillation trainer writes checkpoint", distill_output.exists())
+    check("Distillation trainer reports grouped decisions", distill_summary.rows == 4)
+
 passed = sum(1 for _, ok, _ in results if ok)
 failed = len(results) - passed
 print(f"\nRESULTS: {passed}/{len(results)} passed, {failed} failed")

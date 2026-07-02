@@ -48,3 +48,34 @@ def blend_targets(value_target: float, heuristic_target: float, terminal_weight:
     """Blend eventual win/loss target with shaped state value."""
     weight = _clamp(terminal_weight, 0.0, 1.0)
     return _clamp(weight * value_target + (1.0 - weight) * heuristic_target)
+
+
+def _row_metric(row: object, key: str, default: float = 0.0) -> float:
+    if isinstance(row, dict):
+        return float(row.get(key, default))
+    return default
+
+
+def step_reward(prev_state, next_state, player: int) -> float:
+    """
+    Lightweight per-step reward for PPO.
+
+    Supports either GameState objects or recorded JSONL decision rows. The
+    row-based path keeps PPO usable offline without requiring engine replay.
+    """
+    if isinstance(prev_state, GameState) and isinstance(next_state, GameState):
+        me_prev = prev_state.players[player]
+        opp_prev = prev_state.players[1 - player]
+        me_next = next_state.players[player]
+        opp_next = next_state.players[1 - player]
+        shield_delta = (opp_prev.shield_count - opp_next.shield_count) * 0.10
+        creature_delta = (me_next.battle_zone_count - opp_next.battle_zone_count) * 0.05
+        mana_delta = (me_next.mana_count - opp_next.mana_count) * 0.02
+        hand_delta = (me_next.hand_count - opp_next.hand_count) * 0.03
+        return _clamp(shield_delta + creature_delta + mana_delta + hand_delta, -0.5, 0.5)
+
+    prev_heuristic = _row_metric(prev_state, "heuristic_target")
+    next_heuristic = _row_metric(next_state, "heuristic_target")
+    prev_value = _row_metric(prev_state, "value_target")
+    next_value = _row_metric(next_state, "value_target")
+    return _clamp((next_heuristic - prev_heuristic) + 0.25 * (next_value - prev_value), -0.5, 0.5)

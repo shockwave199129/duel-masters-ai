@@ -26,6 +26,7 @@ from engine.action_executor import execute_action
 from engine.action_generator import _get_mana_combinations, get_legal_actions
 from engine.game_runner import validate_invariants
 from rules import RuleKnowledgeService
+from training.eval import run_logged_game as shared_run_logged_game
 
 logger = logging.getLogger("play_neural_game")
 
@@ -459,7 +460,7 @@ def main() -> None:
             emit=emit,
         )
     elif args.show_steps or args.report_path is not None:
-        final_state = _run_logged_game(
+        final_state = shared_run_logged_game(
             initial_state=state,
             bot0=bot0,
             bot1=bot1,
@@ -470,7 +471,7 @@ def main() -> None:
             emit=emit,
         )
     else:
-        final_state = _run_logged_game(
+        final_state = shared_run_logged_game(
             initial_state=state,
             bot0=bot0,
             bot1=bot1,

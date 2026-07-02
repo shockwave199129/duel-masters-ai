@@ -33,6 +33,7 @@ from decks.prebuilt import _apply_extra_zones, prebuilt_deck_from_dict
 from engine.action_executor import execute_action
 from engine.action_generator import get_legal_actions
 from engine.game_runner import validate_invariants
+from bot.factory import make_bot
 from training.rewards import blend_targets, heuristic_state_value
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,9 @@ def _record_decision(
     db,
     encoder_version: int,
     rule_service=None,
+    policy_log_prob: float | None = None,
+    behavior_log_prob: float | None = None,
+    was_random: bool | None = None,
 ) -> dict[str, Any]:
     player = action.player
     (
@@ -169,6 +173,9 @@ def _record_decision(
         "legal_action_features": legal_action_features,
         "chosen_index": chosen_index,
         "policy_target": policy_target,
+        "policy_log_prob": policy_log_prob,
+        "behavior_log_prob": behavior_log_prob,
+        "was_random": was_random,
         "chosen_features": state_features + legal_action_features[chosen_index],
         "chosen_action": repr(action),
         "action_repr": repr(action),
@@ -231,6 +238,7 @@ def run_recorded_game(
     epsilon: float = 0.05,
     first_player: int | None = 0,
     model_path: str | Path | None = None,
+    bot_specs: tuple[str, str] | None = None,
     terminal_weight: float = 0.65,
     use_database_decks: bool = False,
     deck_source: str | None = None,
@@ -240,8 +248,6 @@ def run_recorded_game(
     rule_service=None,
 ) -> tuple[GameState, list[dict[str, Any]]]:
     """Run one neural-vs-neural game and append finalized decision rows."""
-    from bot.neural_bot import NeuralBot
-
     rng = random.Random(seed)
     state, deck_slots, deck_ids, deck_names, actual_first_player = _load_self_play_state(
         deck_json=deck_json,
@@ -255,21 +261,10 @@ def run_recorded_game(
         deck_source=deck_source,
         allow_mirror_matches=allow_mirror_matches,
     )
+    seat_specs = bot_specs or ("neural", "neural")
     bots = {
-        0: NeuralBot(
-            model_path=model_path,
-            epsilon=epsilon,
-            seed=seed,
-            encoder_version=policy_encoder_version,
-            rule_service=rule_service,
-        ),
-        1: NeuralBot(
-            model_path=model_path,
-            epsilon=epsilon,
-            seed=seed + 1,
-            encoder_version=policy_encoder_version,
-            rule_service=rule_service,
-        ),
+        0: make_bot(seat_specs[0], seed=seed, rule_service=rule_service, model_path=model_path),
+        1: make_bot(seat_specs[1], seed=seed + 1, rule_service=rule_service, model_path=model_path),
     }
     records: list[dict[str, Any]] = []
 
@@ -281,8 +276,15 @@ def run_recorded_game(
             raise RuntimeError("No legal actions available")
 
         acting_player = legal_actions[0].player
-        action = bots[acting_player].choose_from_actions(state, legal_actions, db=db)
+        bot = bots[acting_player]
+        if hasattr(bot, "choose_from_actions"):
+            action = bot.choose_from_actions(state, legal_actions, db=db)
+        else:
+            action = bot.choose_action(state, db=db)
         chosen_index = legal_actions.index(action)
+        policy_log_prob = getattr(bot, "last_policy_log_prob", None)
+        behavior_log_prob = getattr(bot, "last_behavior_log_prob", None)
+        was_random = getattr(bot, "last_was_random", None)
         records.append(
             _record_decision(
                 game_id=game_id,
@@ -299,8 +301,14 @@ def run_recorded_game(
                 db=db,
                 encoder_version=record_encoder_version,
                 rule_service=rule_service,
+                policy_log_prob=policy_log_prob,
+                behavior_log_prob=behavior_log_prob,
+                was_random=was_random,
             )
         )
+        records[-1]["seat_bot_0"] = seat_specs[0]
+        records[-1]["seat_bot_1"] = seat_specs[1]
+        records[-1]["policy_model_path"] = str(model_path) if model_path is not None else ""
 
         try:
             state = execute_action(state, action, db=db, validate=False)
@@ -327,6 +335,10 @@ def run_self_play_games(
     first_player: int | None = 0,
     randomize_seating: bool = True,
     model_path: str | Path | None = None,
+    bot_p0: str = "neural",
+    bot_p1: str = "neural",
+    opponent_pool: str | None = None,
+    league_dir: str | Path | None = None,
     terminal_weight: float = 0.65,
     overwrite: bool = False,
     use_database_decks: bool = False,
@@ -357,6 +369,16 @@ def run_self_play_games(
         scheduled_first_player = first_player
         if randomize_seating:
             scheduled_first_player = _balanced_bit(index, first_player_offset)
+        seat_specs = (bot_p0, bot_p1)
+        if opponent_pool:
+            pool = [item.strip() for item in opponent_pool.split(",") if item.strip()]
+            opponent_spec = pool[index % len(pool)] if pool else "neural"
+            if opponent_spec == "neural" and league_dir is not None:
+                league_path = Path(league_dir)
+                checkpoints = sorted(league_path.glob("*.pt"))
+                if checkpoints:
+                    opponent_spec = f"checkpoint:{checkpoints[index % len(checkpoints)]}"
+            seat_specs = (bot_p0, opponent_spec)
         state, records = run_recorded_game(
             db=db,
             deck_json=deck_json,
@@ -369,6 +391,7 @@ def run_self_play_games(
             epsilon=epsilon,
             first_player=scheduled_first_player,
             model_path=model_path,
+            bot_specs=seat_specs,
             terminal_weight=terminal_weight,
             use_database_decks=use_database_decks,
             deck_source=deck_source,

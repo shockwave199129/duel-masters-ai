@@ -176,6 +176,22 @@ find . -name "*.pyc" -delete
 # rm -rf data/self_play/ data/reports/ dm_engine/models/
 ```
 
+
+### Additional Command Categories
+
+#### Build
+- This project is Python‑only; no compilation step is required. Ensure all dependencies are installed via `pip install -r requirements.txt` before running scripts.
+
+#### Format
+- Code formatting is not enforced automatically. You may run `black .` or `ruff format .` locally if you prefer a consistent style.
+
+#### Development Server
+- No long‑running development server is part of the toolkit. Use the CLI scripts in `dm_engine/scripts/` for interactive runs.
+
+#### Miscellaneous
+- `git status` – inspect repository changes.
+- `git diff` – view pending modifications.
+- `git commit -m "type: message"` – commit following Conventional Commit conventions.
 ## Patterns
 
 ### Module Imports
