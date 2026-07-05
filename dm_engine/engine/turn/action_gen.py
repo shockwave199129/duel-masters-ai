@@ -632,6 +632,18 @@ def _generate_activated_ability_actions(
     return actions
 
 
+def _effect_active_in_phase(effect, phase: Phase) -> bool:
+    active_phases = getattr(effect, "active_in_phase", ("any",))
+    if not active_phases or "any" in active_phases:
+        return True
+    phase_name = phase.name.lower()
+    return phase_name in {str(item).lower() for item in active_phases}
+
+
+def _filter_effects_by_phase(effects, phase: Phase):
+    return [effect for effect in effects if _effect_active_in_phase(effect, phase)]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase: ATTACK  (rule 505-506)
 # ─────────────────────────────────────────────────────────────────────────────

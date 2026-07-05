@@ -51,7 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--games", type=int, default=15)
     parser.add_argument("--preset", choices=sorted(GAME_PRESETS), default=None, help="Use a standard v2 game count: quick=50, standard=100, large=500")
     parser.add_argument("--seed-start", type=int, default=1)
-    parser.add_argument("--max-steps", type=int, default=1000)
+    parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--epsilon", type=float, default=0.05)
     parser.add_argument("--first-player", type=int, choices=[0, 1], default=0)
     parser.add_argument("--model-path", type=Path, default=None)
@@ -108,7 +108,8 @@ def main() -> None:
         parser.error("--dsn is required unless DATABASE_URL is set in crawler/.env")
 
     db = CardDatabase(args.dsn)
-    db.load()
+    if not args.use_db_decks:
+        db.load()
     rule_service = (
         RuleKnowledgeService.from_card_database(
             db,

@@ -12,25 +12,38 @@ load_env_file() {
     local env_file="$1"
     [[ -f "${env_file}" ]] || return 0
     while IFS= read -r line || [[ -n "${line}" ]]; do
-        [[ -z "${line}" || "${line}" == \#* || "${line}" != *=* ]] && continue
+        case "${line}" in
+            ""|\#*)
+                continue
+                ;;
+            export\ *)
+                line="${line#export }"
+                ;;
+        esac
+
+        [[ "${line}" == *"="* ]] || continue
         local key="${line%%=*}"
         local value="${line#*=}"
         key="${key//[[:space:]]/}"
+        [[ -n "${key}" ]] || continue
+
         value="${value%\"}"
         value="${value#\"}"
         value="${value%\'}"
         value="${value#\'}"
-        export "${key}=${value}"
+
+        printf -v "${key}" '%s' "${value}"
+        export "${key}"
     done < "${env_file}"
 }
 
 load_env_file "${BASE_DIR}/.env"
 load_env_file "${BASE_DIR}/crawler/.env"
 
-GENERATIONS=3   # how many generations to train
+GENERATIONS=1   # how many generations to train
 PROMOTION_THRESHOLD="0.52"
 TRAIN_MODE="${TRAIN_MODE:-ppo}"
-SELF_PLAY_PRESET="${SELF_PLAY_PRESET:-standard}"
+SELF_PLAY_PRESET="${SELF_PLAY_PRESET:-quick}"
 SELF_PLAY_WORKERS="${SELF_PLAY_WORKERS:-1}"
 SELF_PLAY_GAMES="${SELF_PLAY_GAMES:-}"
 EVAL_GAMES="${EVAL_GAMES:-10}"
@@ -61,7 +74,6 @@ while (( GEN < GENERATIONS )); do
     echo "=== Generation ${GEN} → self-play (gen ${NEXT_GEN} data) ==="
     SELF_PLAY_CMD=(
         python dm_engine/scripts/run_self_play.py
-        --preset "${SELF_PLAY_PRESET}"
         --use-db-decks
         --output "${SELF_PLAY_OUTPUT}"
         --overwrite

@@ -237,4 +237,4 @@ def _queue_trigger(state, rt: RegisteredTrigger, trigger_data: dict) -> None:
         trigger_data=full_trigger_data,
         priority=apnap_priority,
     )
-    state.effect_stack.add_pending_trigger(pending)
+    state.effect_stack.add_trigger(pending)

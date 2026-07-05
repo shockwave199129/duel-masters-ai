@@ -148,6 +148,30 @@ VALID_ZONE_VALUES = {z.value for z in Zone}
 # it means "this ability functions in all zones". The engine does not have
 # a Zone.ANY enum; we accept it here and map to the full zone set at runtime.
 VALID_ZONE_VALUES.add("any")
+ZONE_ALIASES = {
+    "deck_zone": "deck",
+    "hand_zone": "hand",
+    "handzone": "hand",
+    "mana_zone": "mana_zone",
+    "manazone": "mana_zone",
+    "battle_zone": "battle_zone",
+    "battlezone": "battle_zone",
+    "shield_zone": "shield_zone",
+    "shieldzone": "shield_zone",
+    "shield": "shield_zone",
+    "graveyard_zone": "graveyard",
+    "graveyardzone": "graveyard",
+    "abyss_zone": "abyss_zone",
+    "banished": "abyss_zone",
+    "hyperspatial_zone": "hyperspatial",
+    "stack": "battle_zone",
+    "ultra_gr_zone": "ultra_gr",
+    "ultra_graveyard": "ultra_gr",
+    "tamaseed_zone": "battle_zone",
+    "field_zone": "battle_zone",
+    "super_gacharange": "ultra_gr",
+    "super_gachaarange": "ultra_gr",
+}
 
 
 def _validate_zones(zone_list: list[str]) -> tuple[str, ...]:
@@ -160,6 +184,10 @@ def _validate_zones(zone_list: list[str]) -> tuple[str, ...]:
         return ("battle_zone",)
     validated = []
     for z in zone_list:
+        z = str(z).strip()
+        z = z.replace(" ", "_")
+        z = z.lower()
+        z = ZONE_ALIASES.get(z, z)
         if z in VALID_ZONE_VALUES:
             validated.append(z)
         else:
@@ -707,6 +735,38 @@ class CardDatabase:
             ultra_gr=tuple(self.require(card_id) for card_id in _expand_zone_counts(deck_row["ultra_gr"])),
             start_battle_zone=tuple(self.require(card_id) for card_id in _expand_zone_list(deck_row["start_battle_zone"])),
         )
+
+    def get_training_deck_card_ids(self, deck_id: int) -> set[int]:
+        """Return every card ID referenced by a persisted training deck."""
+        conn = psycopg2.connect(self._dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT card_id
+                    FROM training_deck_cards
+                    WHERE deck_id = %s
+                    """,
+                    (deck_id,),
+                )
+                ids = {int(row[0]) for row in cur.fetchall()}
+                cur.execute(
+                    """
+                    SELECT hyperspatial, ultra_gr, start_battle_zone
+                    FROM training_decks
+                    WHERE id = %s
+                    """,
+                    (deck_id,),
+                )
+                deck_row = cur.fetchone()
+                if deck_row is None:
+                    raise KeyError(f"Training deck ID {deck_id} not found")
+                ids.update(_expand_zone_counts(deck_row[0]))
+                ids.update(_expand_zone_counts(deck_row[1]))
+                ids.update(_expand_zone_list(deck_row[2]))
+                return ids
+        finally:
+            conn.close()
 
     def sample_training_decks(
         self,

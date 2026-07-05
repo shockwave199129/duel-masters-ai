@@ -87,7 +87,10 @@ class ActionScoreNet(nn.Module):
         self.action_proj = ModalityProjection(self.act_size, hidden_size, dropout)
         # After concatenation we have hidden_size*2 dimensions
         self.input_norm = nn.LayerNorm(hidden_size * 2)
-        self.input_projection = nn.Identity()
+        self.input_projection = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.GELU(),
+        )
         self.blocks = nn.Sequential(
             *[ResidualMLPBlock(hidden_size, dropout=dropout) for _ in range(num_blocks)]
         )
@@ -111,7 +114,7 @@ class ActionScoreNet(nn.Module):
         x = torch.cat([state_proj, action_proj], dim=-1)
         # Normalize and feed through residual blocks
         x = self.input_norm(x)
-        x = self.input_projection(x)  # identity
+        x = self.input_projection(x)
         x = self.blocks(x)
         logits = self.head(x)
         # Scale logits with learnable temperature (clamp to avoid extreme values)
@@ -201,7 +204,7 @@ def save_model(model: nn.Module, path: str | Path) -> None:
     """Save weights for later generations."""
     metadata = {
         "state_dict": model.state_dict(),
-        "schema_version": 2,
+        "schema_version": 3,
     }
     if isinstance(model, ActionScoreNet):
         encoder_version = 3 if model.input_size == MODEL_INPUT_SIZE_V3 else 2

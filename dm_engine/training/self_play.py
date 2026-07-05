@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -207,17 +208,17 @@ def _finalize_records(records: list[dict[str, Any]], state: GameState, *, termin
         )
 
 
-def _mark_records_error(records: list[dict[str, Any]], error: Exception) -> None:
-    message = f"{type(error).__name__}: {error}"
-    for record in records:
-        record["engine_error"] = message
-
-
 def _append_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, separators=(",", ":")) + "\n")
+
+
+def _append_jsonl_row(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, separators=(",", ":")) + "\n")
 
 
 def _balanced_bit(index: int, offset: int) -> int:
@@ -234,7 +235,7 @@ def run_recorded_game(
     game_id: str,
     game_index: int = 0,
     seat_flip: bool = False,
-    max_steps: int = 1000,
+    max_steps: int | None = None,
     epsilon: float = 0.05,
     first_player: int | None = 0,
     model_path: str | Path | None = None,
@@ -246,7 +247,7 @@ def run_recorded_game(
     policy_encoder_version: int | None = None,
     record_encoder_version: int = 3,
     rule_service=None,
-) -> tuple[GameState, list[dict[str, Any]]]:
+) -> tuple[GameState, int]:
     """Run one neural-vs-neural game and append finalized decision rows."""
     rng = random.Random(seed)
     state, deck_slots, deck_ids, deck_names, actual_first_player = _load_self_play_state(
@@ -266,27 +267,29 @@ def run_recorded_game(
         0: make_bot(seat_specs[0], seed=seed, rule_service=rule_service, model_path=model_path),
         1: make_bot(seat_specs[1], seed=seed + 1, rule_service=rule_service, model_path=model_path),
     }
-    records: list[dict[str, Any]] = []
+    decision_count = 0
 
-    for step in range(max_steps):
-        if state.is_terminal():
-            break
-        legal_actions = bots[state.active_player].generate_candidate_actions(state, db=db)
-        if not legal_actions:
-            raise RuntimeError("No legal actions available")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        raw_path = Path(tmpdir) / f"{game_id}.raw.jsonl"
+        step = 0
+        while max_steps is None or step < max_steps:
+            if state.is_terminal():
+                break
+            legal_actions = bots[state.active_player].generate_candidate_actions(state, db=db)
+            if not legal_actions:
+                raise RuntimeError("No legal actions available")
 
-        acting_player = legal_actions[0].player
-        bot = bots[acting_player]
-        if hasattr(bot, "choose_from_actions"):
-            action = bot.choose_from_actions(state, legal_actions, db=db)
-        else:
-            action = bot.choose_action(state, db=db)
-        chosen_index = legal_actions.index(action)
-        policy_log_prob = getattr(bot, "last_policy_log_prob", None)
-        behavior_log_prob = getattr(bot, "last_behavior_log_prob", None)
-        was_random = getattr(bot, "last_was_random", None)
-        records.append(
-            _record_decision(
+            acting_player = legal_actions[0].player
+            bot = bots[acting_player]
+            if hasattr(bot, "choose_from_actions"):
+                action = bot.choose_from_actions(state, legal_actions, db=db)
+            else:
+                action = bot.choose_action(state, db=db)
+            chosen_index = legal_actions.index(action)
+            policy_log_prob = getattr(bot, "last_policy_log_prob", None)
+            behavior_log_prob = getattr(bot, "last_behavior_log_prob", None)
+            was_random = getattr(bot, "last_was_random", None)
+            raw_row = _record_decision(
                 game_id=game_id,
                 seed=seed,
                 step=step,
@@ -305,22 +308,32 @@ def run_recorded_game(
                 behavior_log_prob=behavior_log_prob,
                 was_random=was_random,
             )
-        )
-        records[-1]["seat_bot_0"] = seat_specs[0]
-        records[-1]["seat_bot_1"] = seat_specs[1]
-        records[-1]["policy_model_path"] = str(model_path) if model_path is not None else ""
+            raw_row["seat_bot_0"] = seat_specs[0]
+            raw_row["seat_bot_1"] = seat_specs[1]
+            raw_row["policy_model_path"] = str(model_path) if model_path is not None else ""
+            _append_jsonl_row(raw_path, raw_row)
+            decision_count += 1
 
-        try:
-            state = execute_action(state, action, db=db, validate=False)
-            validate_invariants(state)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.exception("Stopping %s after engine error at step %s", game_id, step)
-            _mark_records_error(records, exc)
-            break
+            try:
+                state = execute_action(state, action, db=db, validate=False)
+                validate_invariants(state)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.exception("Stopping %s after engine error at step %s", game_id, step)
+                with raw_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({"engine_error": f"{type(exc).__name__}: {exc}"}) + "\n")
+                break
+            step += 1
 
-    _finalize_records(records, state, terminal_weight=terminal_weight)
-    _append_jsonl(Path(output_path), records)
-    return state, records
+        with raw_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    record = json.loads(line)
+                    if "engine_error" in record:
+                        continue
+                    _finalize_records([record], state, terminal_weight=terminal_weight)
+                    _append_jsonl_row(Path(output_path), record)
+
+    return state, decision_count
 
 
 def run_self_play_games(
@@ -364,7 +377,7 @@ def run_self_play_games(
 
     for index in range(games):
         seed = seed_start + index
-        game_id = f"gen0-v2-{index + 1:06d}"
+        game_id = f"gen0-v3-{index + 1:06d}"
         seat_flip = randomize_seating and _balanced_bit(index, seat_offset) == 1
         scheduled_first_player = first_player
         if randomize_seating:
@@ -379,7 +392,7 @@ def run_self_play_games(
                 if checkpoints:
                     opponent_spec = f"checkpoint:{checkpoints[index % len(checkpoints)]}"
             seat_specs = (bot_p0, opponent_spec)
-        state, records = run_recorded_game(
+        state, decisions_written = run_recorded_game(
             db=db,
             deck_json=deck_json,
             output_path=output,
@@ -400,7 +413,7 @@ def run_self_play_games(
             record_encoder_version=record_encoder_version,
             rule_service=rule_service,
         )
-        decisions += len(records)
+        decisions += decisions_written
         winner = _winner_from_result(state.result)
         if winner == 0:
             player0_wins += 1
@@ -412,7 +425,7 @@ def run_self_play_games(
             unfinished += 1
         logger.info(
             "Recorded %s decisions for %s: result=%s winner=%s",
-            len(records),
+            decisions_written,
             game_id,
             state.result.value,
             winner,
@@ -442,17 +455,27 @@ def _load_self_play_state(
     allow_mirror_matches: bool,
 ) -> tuple[GameState, tuple[int, int], tuple[int | None, int | None], tuple[str, str], int]:
     if use_database_decks:
-        sampled = db.sample_training_decks(
-            rng,
-            count=2,
-            source=deck_source,
-            allow_mirror=allow_mirror_matches,
-        )
+        available_ids = db.list_training_deck_ids(source=deck_source, active_only=True)
+        if not available_ids:
+            raise ValueError("No active training decks found in the database")
+        if allow_mirror_matches:
+            selected_ids = [rng.choice(available_ids) for _ in range(2)]
+        else:
+            if len(available_ids) < 2:
+                raise ValueError("Need at least 2 active training decks")
+            selected_ids = rng.sample(available_ids, 2)
+
+        unique_card_ids: set[int] = set()
+        for deck_id in selected_ids:
+            unique_card_ids.update(db.get_training_deck_card_ids(deck_id))
+        db.load(sorted(unique_card_ids))
+
         deck_slots = (1, 0) if seat_flip else (0, 1)
-        assigned = (sampled[deck_slots[0]], sampled[deck_slots[1]])
-        p0 = assigned[0][1]
-        p1 = assigned[1][1]
-        deck_ids = (assigned[0][0], assigned[1][0])
+        assigned_ids = (selected_ids[deck_slots[0]], selected_ids[deck_slots[1]])
+        assigned = tuple(db.load_training_deck(deck_id) for deck_id in assigned_ids)
+        p0 = assigned[0]
+        p1 = assigned[1]
+        deck_ids = assigned_ids
         deck_names = (p0.main_deck.name, p1.main_deck.name)
     else:
         if deck_json is None:

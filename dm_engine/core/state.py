@@ -129,6 +129,10 @@ class EffectStack:
     def add_trigger(self, trigger: PendingTrigger) -> None:
         self.pending_triggers.append(trigger)
 
+    def add_pending_trigger(self, trigger: PendingTrigger) -> None:
+        """Backward-compatible alias for older trigger queue call sites."""
+        self.add_trigger(trigger)
+
     def pop_next_trigger(self) -> Optional[PendingTrigger]:
         """
         Rule 101.4a: APNAP ordering.
