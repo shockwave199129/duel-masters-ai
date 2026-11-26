@@ -1,0 +1,47 @@
+{
+  "players": [
+    {
+      "name": "Deck 3",
+      "owner": "Player 0",
+      "main": {
+        "Broom_=_Proof": 4,
+        "Kawagutsu_=_Aguus": 4,
+        "Gotsunma_=_Dhamma,_Soul_Abyss": 4,
+        "Jashin_Emperor,_Abyssal_Darkness": 4,
+        "Just_In_You": 4,
+        "Jabibirublood,_Wicked_Soul_Dragon": 4,
+        "Ater_Gorghini": 4,
+        "Oa:Nateha": 2,
+        "Abyssbell_=_Jashin_Emperor": 2,
+        "Jablood,_Wicked_Dragon": 3,
+        "Magnum,_Allshot_Puppet": 3,
+        "Felix_Misery": 2
+      }
+    },
+    {
+      "name": "Deck 4",
+      "owner": "Player 1",
+      "main": {
+        "Kaiser_Victory,_Secret_Extreme_Triumph": 2,
+        "Hustle_Castle,_Garde_Seventh_Floor": 4,
+        "Disaster_Tune": 4,
+        "Abyssal_Counterattack": 1,
+        "Romanov_the_4th,_Demonic_Eye_Gaia": 3,
+        "Kuuzen,_Sinister_General_of_Thunderbolt_/_Dark_Life": 1,
+        "Kernel,_Blue_Stagnation_Dragon_Elemental_/_Silent_Jealousy": 4,
+        "Saga_In_Zenaku": 2,
+        "Perfect_Petency": 2,
+        "Endless_Justice_Romanov_Bible": 2,
+        "Cobra,_Snake_Ninja_Holy_Chaos": 2,
+        "Gaiash_Kaiser,_the_Meteor": 3,
+        "Babelginus,_Demonic_Dragon": 1,
+        "CRYMAX_Jaouga": 1,
+        "Spell_Del_Fin,_Light_Divine_Dragon": 1,
+        "Million_Vejita,_Tyrant_T": 1,
+        "Brachiodrange": 1,
+        "Gigandydanos,_Big_Tree_King": 2,
+        "Seven%27s_Gate_Zadan,_Demon_King": 3
+      }
+    }
+  ]
+}

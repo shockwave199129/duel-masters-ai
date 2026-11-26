@@ -27,6 +27,7 @@ from engine.action_executor import execute_action
 from engine.action_generator import _get_mana_combinations, get_legal_actions
 from engine.game_runner import validate_invariants
 from rules import RuleKnowledgeService
+from training.device import play_device
 from training.eval import run_logged_game as shared_run_logged_game
 
 logger = logging.getLogger("play_neural_game")
@@ -50,6 +51,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dsn", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--deck-json", type=Path, default=DEFAULT_DECK_JSON)
     parser.add_argument("--model-path", type=Path, default=None)
+    parser.add_argument(
+        "--device",
+        choices=["cpu", "cuda", "auto"],
+        default="cpu",
+        help="Where the neural bots run. Game rules always run on the CPU, so the GPU may not be faster",
+    )
     parser.add_argument(
         "--mode",
         choices=["neural-vs-random", "neural-vs-neural", "human-vs-neural"],
@@ -394,6 +401,9 @@ def main() -> None:
     if not args.dsn:
         parser.error("--dsn is required unless DATABASE_URL is set in crawler/.env")
 
+    device = play_device(parser, args.device)
+    logging.getLogger(__name__).info("Neural bots run on %s", device)
+
     db = CardDatabase(args.dsn)
     db.load()
     rule_service = RuleKnowledgeService.from_card_database(
@@ -419,6 +429,7 @@ def main() -> None:
             seed=neural_seed,
             encoder_version=args.encoder_version,
             rule_service=rule_service,
+            device=device,
         )
     else:
         neural_bot = None
@@ -428,6 +439,7 @@ def main() -> None:
         seed=bot0_seed,
         encoder_version=args.encoder_version,
         rule_service=rule_service,
+        device=device,
     )
     bot1 = (
         NeuralBot(
@@ -436,6 +448,7 @@ def main() -> None:
             seed=bot1_seed,
             encoder_version=args.encoder_version,
             rule_service=rule_service,
+            device=device,
         )
         if args.mode == "neural-vs-neural"
         else RandomBot(seed=bot1_seed)

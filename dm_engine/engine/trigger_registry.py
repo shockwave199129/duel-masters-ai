@@ -14,6 +14,9 @@ from typing import Optional
 from collections import defaultdict
 
 from core.enums import TriggerEvent
+from engine.trigger_scope import watches
+from core.card_scripts import PUT_TRIGGER_SUPPRESSORS
+from core.continuous_rules import has_abilities
 from core.cards import CardEffect
 
 
@@ -143,6 +146,23 @@ def fire_trigger(
         if not source_card:
             continue
         
+        # "That ability won't trigger": a creature's own abilities on being put
+        if (
+            event in (TriggerEvent.ON_ENTER_BATTLE_ZONE, TriggerEvent.ON_SUMMON)
+            and rt.source_uid == source_uid
+            and _put_triggers_suppressed(state, source_card.controller)
+        ):
+            continue
+
+        found_source = state.find_creature_anywhere(rt.source_uid)
+        if found_source is not None and not has_abilities(found_source[1]):
+            continue
+
+        if not watches(
+            state, event, effect, rt.source_uid, source_card, source_uid, trigger_data,
+        ):
+            continue
+
         # Build a mock trigger object for condition evaluation
         mock_trigger = type('MockTrigger', (), {
             'controller': source_card.controller,
@@ -168,6 +188,14 @@ def fire_trigger(
     
     for rt in non_turn_triggers:
         _queue_trigger(state, rt, trigger_data)
+
+
+def _put_triggers_suppressed(state, controller: int) -> bool:
+    return any(
+        creature.definition.slug in PUT_TRIGGER_SUPPRESSORS
+        and not creature.is_ignored and has_abilities(creature)
+        for creature in state.players[1 - controller].battle_zone
+    )
 
 
 def _find_card_by_uid(state, uid: str):
@@ -201,7 +229,6 @@ def _effect_active_in_phase(effect, phase) -> bool:
 def _queue_trigger(state, rt: RegisteredTrigger, trigger_data: dict) -> None:
     """Create and queue a PendingTrigger for resolution."""
     from engine.trigger_resolver import PendingTrigger
-    from core.enums import Keyword
     
     # Build trigger data with source info
     full_trigger_data = {
@@ -215,26 +242,11 @@ def _queue_trigger(state, rt: RegisteredTrigger, trigger_data: dict) -> None:
     source_card = _find_card_by_uid(state, rt.source_uid)
     controller = source_card.controller if source_card else 0
     
-    # Determine APNAP priority (Rule 101.4a):
-    # 0 = S-Trigger (shield trigger keyword — always first)
-    # 1 = active player's triggers
-    # 2 = non-active player's triggers
-    apnap_priority = -1  # unassigned legacy default
-    if source_card is not None:
-        defn = getattr(source_card, "definition", None)
-        if defn is not None and Keyword.SHIELD_TRIGGER in defn.keywords:
-            apnap_priority = 0
-        elif controller == state.active_player:
-            apnap_priority = 1
-        else:
-            apnap_priority = 2
-    
     pending = PendingTrigger(
         effect=rt.effect,
         source_uid=rt.source_uid,
         source_card_id=rt.source_card_id,
         controller=controller,
         trigger_data=full_trigger_data,
-        priority=apnap_priority,
     )
     state.effect_stack.add_trigger(pending)

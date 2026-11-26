@@ -1,6 +1,6 @@
 """Device selection and shared training-step settings for the trainers.
 
-Self-play and evaluation stay on the CPU; only training uses the GPU.
+Trainers default to "auto". Self-play, evaluation and games default to the CPU.
 """
 
 from __future__ import annotations
@@ -21,6 +21,14 @@ def get_device(prefer: str = "auto") -> torch.device:
     if prefer == "cuda":
         raise ValueError("--device cuda was requested but PyTorch cannot see a GPU")
     return torch.device("cpu")
+
+
+def play_device(parser, requested: str) -> str:
+    """Resolve a play script's --device value, reporting a missing GPU as a usage error."""
+    try:
+        return get_device(requested).type
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 def autocast(device: torch.device):

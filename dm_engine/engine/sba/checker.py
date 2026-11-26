@@ -9,7 +9,6 @@ SBAs implemented:
   ✅ 703.4b: Player's deck reaches 0 cards → loses
   ✅ 703.4c: Creature with power ≤ 0 → destroyed
   ✅ 703.4d: Creature that lost battle → destroyed
-  ✅ 703.4e: Creature with "cannot attack" → tapped (NEW)
   ✅ 703.4f: Cross Gear not attached → destroyed (NEW)
   ✅ 703.4g: Aura/Fortress not attached → graveyard (NEW)
   ✅ 703.4h: Evolution creature reconstruction
@@ -24,10 +23,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from core.enums import GameResult, CardType
-from core.zones import Creature
+from core.card_scripts import SUPER_SOUL
+from core.continuous_rules import has_abilities, queue_ability, sync_ignored_abilities
+from core.enums import GameResult, CardType, CardSubtype
+from core.zones import Creature, HandCard
 from engine.sba.missing_sbas import (
-    _sba_cannot_attack_tap,
     _sba_aura_fortress_standalone,
     _sba_weapon_standalone,
 )
@@ -44,6 +44,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def run_state_based_actions(state: GameState) -> None:
+    """Apply state-based actions to ``state`` until none apply (rule 703.3)."""
+    for _ in range(100):  # guards against a loop
+        if not _check_once(state):
+            return
+    logger.warning("State-based actions did not settle; stopping.")
+
+
 def check_state_based_actions(state: GameState) -> GameState:
     """
     Execute all state-based actions in a loop until none trigger.
@@ -52,21 +60,7 @@ def check_state_based_actions(state: GameState) -> GameState:
     until no SBAs apply. Then return the updated state.
     """
     s = state.copy()
-    loop_count = 0
-    max_loops = 100  # Prevent infinite loops
-
-    while loop_count < max_loops:
-        loop_count += 1
-        fired = False
-
-        # Check each SBA in order. If any fires, loop again.
-        fired |= _check_once(s)
-
-        if not fired:
-            break
-
-    if loop_count >= max_loops:
-        logger.warning("SBA loop exceeded %d iterations; stopping.", max_loops)
+    run_state_based_actions(s)
 
     # This round of events is over, so replacement effects can apply to the next
     s.replacement_effects.reset_all()
@@ -93,10 +87,16 @@ def _check_once(state: GameState) -> bool:
     if state.result != GameResult.IN_PROGRESS:
         return fired
 
+    # Abilities come back once the card that named them has left
+    sync_ignored_abilities(state)
+    watch_graveyards(state)
+
+    # Not a rule 703 action: notices an EX Life shield that was broken or removed
+    fired |= check_ex_life_shields(state)
+
     # ── Board cleanup ────────────────────────────────────────────────────────
     fired |= check_power_zero(state)                # 703.4c
     fired |= check_battle_losers(state)             # 703.4d
-    fired |= _sba_cannot_attack_tap(state)          # 703.4e (NEW)
     # Cross Gear in BZ is valid when generated (303.2); no standalone-destroy SBA.
     fired |= _sba_god_link_invalid_detach(state)    # 804.2b — invalid God link detach
     fired |= _sba_standalone_cell(state)            # 703.4g — standalone Cell
@@ -125,8 +125,11 @@ def check_zero_shields(state: GameState) -> bool:
     if ctx is None or not ctx.received_direct_attack:
         return False
     defender_player = ctx.blocker_player if ctx.blocker_player is not None else (1 - ctx.attacker_player)
-    if len(state.players[defender_player].shield_zone) == 0:
-        state.result = GameResult.PLAYER_1_WINS if defender_player == 0 else GameResult.PLAYER_0_WINS
+    if (len(state.players[defender_player].shield_zone) == 0
+            and not state.players[defender_player].loss_pending):
+        from engine.leave_rules import lose_game
+        ctx.received_direct_attack = False  # this direct attack has been dealt with
+        lose_game(state, defender_player)
         return True
     return False
 
@@ -136,8 +139,11 @@ def check_deck_empty(state: GameState) -> bool:
     if state.result != GameResult.IN_PROGRESS:
         return False
     for player_idx in range(2):
-        if len(state.players[player_idx].deck) == 0:
-            state.result = GameResult.PLAYER_1_WINS if player_idx == 0 else GameResult.PLAYER_0_WINS
+        player = state.players[player_idx]
+        if (len(player.deck) == 0 or player.ran_out_of_cards) and not player.loss_pending:
+            from engine.leave_rules import lose_game
+            player.ran_out_of_cards = False
+            lose_game(state, player_idx)
             return True
     return False
 
@@ -146,6 +152,43 @@ def check_deck_empty(state: GameState) -> bool:
 # Board State Cleanup (run until stable)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def watch_graveyards(state: GameState) -> None:
+    """
+    Notice the first time each turn that a card leaves a player's graveyard.
+    Cards leave in many ways, so this compares what is there with last time.
+    """
+    for index, player in enumerate(state.players):
+        present = frozenset(card.uid for card in player.graveyard)
+        gone = player.graveyard_seen - present
+        player.graveyard_seen = present
+        if not gone or player.graveyard_left_this_turn:
+            continue
+        player.graveyard_left_this_turn = True
+        for creature in player.battle_zone:
+            if not has_abilities(creature):
+                continue
+            souls = [creature.definition, *(entry.definition for entry in creature.evolution_stack)]
+            for definition in souls:
+                if definition is not None and definition.slug in SUPER_SOUL:
+                    queue_ability(
+                        state, definition, SUPER_SOUL[definition.slug], source_uid=creature.uid,
+                        controller=index, data={})
+
+
+def check_ex_life_shields(state: GameState) -> bool:
+    from engine.zone_mover import ex_life_shield_left
+
+    fired = False
+    for player_idx in range(2):
+        player = state.players[player_idx]
+        present = {shield.uid for shield in player.shield_zone}
+        for creature in player.battle_zone:
+            shield_uid = creature.temp_flags.get("ex_life_shield")
+            if shield_uid is not None and shield_uid not in present:
+                fired |= ex_life_shield_left(state, player_idx, creature)
+    return fired
+
+
 def check_power_zero(state: GameState) -> bool:
     """Rule 703.4c: Creature with power ≤ 0 → destroyed."""
     fired = False
@@ -153,6 +196,7 @@ def check_power_zero(state: GameState) -> bool:
         creatures_to_destroy = [
             c for c in state.players[player_idx].battle_zone
             if c.definition.card_type == CardType.CREATURE
+            and not c.temp_flags.get("leaving")
             and c.compute_power(state) <= 0
         ]
         for creature in creatures_to_destroy:
@@ -166,7 +210,7 @@ def check_battle_losers(state: GameState) -> bool:
     for player_idx in range(2):
         creatures_to_destroy = [
             c for c in state.players[player_idx].battle_zone
-            if c.temp_flags.get("lost_battle", False)
+            if c.temp_flags.get("lost_battle", False) and not c.temp_flags.get("leaving")
         ]
         for creature in creatures_to_destroy:
             fired |= _destroy_creature(state, player_idx, creature, "battle")
@@ -239,20 +283,20 @@ def check_evolution_reconstruction(state: GameState) -> bool:
 
 
 def check_smax_uniqueness(state: GameState) -> bool:
-    """Rule 703.4i: S-MAX Evolution creature → max 1 per player."""
-    from engine.special_cards.star_evolution import is_star_evolution
-    
+    """Rule 815.1a: a player keeps one S-MAX creature; the others return to hand."""
+    from engine.zone_mover import move_battle_to_zone
+
     fired = False
     for player_idx in range(2):
-        smax_creatures = [
-            c for c in state.players[player_idx].battle_zone
-            if is_star_evolution(c.definition)
-        ]
-        # Keep only the first one; destroy others
-        if len(smax_creatures) > 1:
-            for creature in smax_creatures[1:]:
-                # Put away by a state-based action, which is not destruction
-                fired |= _destroy_creature(state, player_idx, creature, "state_based")
+        player = state.players[player_idx]
+        smax = [c for c in player.battle_zone if c.definition.card_subtype == CardSubtype.STAR_MAX]
+        # The one that was there first stays
+        for creature in smax[1:]:
+            fired |= move_battle_to_zone(
+                state, player_idx, creature.uid, reason="state_based", to_zone="hand",
+                place=lambda definition, uid, hand=player.hand: hand.append(
+                    HandCard(definition=definition, uid=uid)),
+            )
     return fired
 
 

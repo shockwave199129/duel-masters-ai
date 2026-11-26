@@ -180,6 +180,10 @@ class Keyword(Enum):
     FORTRESS_KEYWORD        = "fortress"
     EX_LIFE                 = "ex_life"             # shield a card when entering
 
+    # ── Twinpact cards only ───────────────────────────────────────────────────
+    LAST_BURST              = "last_burst"          # creature destroyed: may cast the spell side
+    MEGA_LAST_BURST         = "mega_last_burst"     # left to hand, mana or graveyard: same
+
     # ── Over Drive (rule 112.2d) ─────────────────────────────────────────────────
     OVER_DRIVE              = "over_drive"           # tap additional mana for bonus ability
 

@@ -2,7 +2,6 @@
 tests/test_missing_sbas.py — Tests for newly implemented SBAs (Rule 703.4e-4m).
 
 Tests cover:
-  - 703.4e: Cannot attack tap
   - 703.4f: Cross Gear standalone destroy
   - 703.4g: Aura/Fortress standalone destroy
   - 703.4m: Weapon standalone destroy
@@ -21,7 +20,6 @@ from core.player_state import PlayerState
 from core.state import GameState, TurnInfo
 from core.zones import Creature
 from engine.sba.missing_sbas import (
-    _sba_cannot_attack_tap,
     _sba_cross_gear_standalone,
     _sba_aura_fortress_standalone,
     _sba_weapon_standalone,
@@ -75,42 +73,6 @@ print("  MISSING SBAs (Rule 703.4e-4m) — COMPREHENSIVE TESTS")
 print("═" * 70)
 
 ALL_PASSED = True
-
-# ════════════════════════════════════════════════════════════════════════════════
-# Test 1: Cannot Attack Tap (Rule 703.4e)
-# ════════════════════════════════════════════════════════════════════════════════
-print("\n" + "─" * 70)
-print("  TEST 1: Cannot Attack Tap (Rule 703.4e)")
-print("─" * 70)
-
-state = make_game_state()
-creature_def = card(101, "Blocker", keywords=[Keyword.CANNOT_ATTACK])
-creature = Creature(
-    definition=creature_def,
-    controller=0,
-    uid="c1",
-    is_tapped=False,
-)
-state.players[0].battle_zone.append(creature)
-
-# Before SBA: creature is not tapped
-ALL_PASSED &= check(
-    "Before SBA: cannot_attack creature is untapped",
-    not creature.is_tapped,
-)
-
-# Run SBA
-fired = _sba_cannot_attack_tap(state)
-ALL_PASSED &= check(
-    "SBA fires for cannot_attack creature",
-    fired,
-)
-
-# After SBA: creature should be tapped
-ALL_PASSED &= check(
-    "After SBA: creature is tapped",
-    creature.is_tapped,
-)
 
 # ════════════════════════════════════════════════════════════════════════════════
 # Test 2: Cross Gear in battle zone (Rule 303.2 — not an SBA cleanup target)

@@ -1,6 +1,9 @@
 """core/zones/creature.py — Creature, PowerModifier, EvolutionStackEntry."""
 
 from __future__ import annotations
+from core.card_scripts import (
+    BREAKER_COUNTS, HYPER_MODE, POWER_ATTACKERS, POWER_PER_OPPONENT_SPELL,
+)
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -211,6 +214,8 @@ class Creature:
                 return global_fix
 
         # ── CDA (Characteristic-Defining Ability) ────────────────────────────────
+        # Released Hyper Mode power replaces the normal power (rule 816.2b)
+        hyper = HYPER_MODE.get(self.definition.slug) if self.hyper_mode_released else None
         cda = self.definition.cda_formula_type
         if cda != CDAFormulaType.NONE:
             cda_base = self._compute_cda_power(game_state_ref)
@@ -271,7 +276,22 @@ class Creature:
                     if amount:
                         modifiers.append((amount, CalculationOp.ADDITION))
 
-        base = calculate_dm(self.base_power, modifiers)
+        # Scripted "Power attacker +N": only while this creature is the attacker
+        bonus = POWER_ATTACKERS.get(self.definition.slug)
+        attack = getattr(game_state_ref, "attack_context", None)
+        if (bonus and attack is not None and attack.attacker_uid == self.uid
+                and not self.temp_flags.get("abilities_ignored")):
+            modifiers.append((bonus, CalculationOp.ADDITION))
+
+        per_spell = POWER_PER_OPPONENT_SPELL.get(self.definition.slug)
+        if (per_spell and game_state_ref is not None
+                and not self.temp_flags.get("abilities_ignored")):
+            opposing_hand = game_state_ref.players[1 - self.controller].hand
+            held = sum(1 for card in opposing_hand if card.definition.is_spell())
+            if held:
+                modifiers.append((per_spell * held, CalculationOp.ADDITION))
+
+        base = calculate_dm(hyper["power"] if hyper else self.base_power, modifiers)
 
         # ── Layer 7 power modifiers (Rule 613) ──────────────────────────────────
         # After standard computation, apply layer-ordered power modifications.
@@ -397,12 +417,17 @@ class Creature:
     # ── Keyword checks (delegate to definition + temp flags) ──────────────────
 
     def has_keyword(self, kw: Keyword) -> bool:
-        return self.definition.has_keyword(kw) or self.temp_flags.get(kw.value, False)
+        # Ignored abilities hide printed keywords, not ones another card grants
+        printed = self.definition.has_keyword(kw) and not self.temp_flags.get("abilities_ignored")
+        return bool(printed or self.temp_flags.get(kw.value, False)
+                    or kw.value in self.temp_flags.get("granted_keywords", ()))
 
-    def can_attack(self) -> bool:
+    def can_attack(self, *, ignore_sickness: bool = False) -> bool:
         if self.is_ignored:          # rule 116.2: ignored creatures cannot attack
             return False
-        if self.temp_flags.get("cannot_attack", False):
+        if "locked_until_turn_of" in self.temp_flags:
+            return False
+        if self.temp_flags.get("cannot_attack", False) or self.has_keyword(Keyword.CANNOT_ATTACK):
             return False
         if self.is_tapped:
             return False
@@ -420,7 +445,8 @@ class Creature:
 
         # Rule 805.6a: Even if awakened Psychic flips back, it has no sickness if in BZ since turn start
         # This is already handled by checking face=1 above, but keep the standard sickness check as fallback
-        if self.has_summoning_sickness and not self.has_keyword(Keyword.SPEED_ATTACKER):
+        if (not ignore_sickness and self.has_summoning_sickness
+                and not self.has_keyword(Keyword.SPEED_ATTACKER)):
             return False
         return True
 
@@ -501,7 +527,12 @@ class Creature:
         return self.has_keyword(Keyword.GUARDMAN) and not self.is_ignored
 
     def shields_broken_on_attack(self) -> int:
-        return self.definition.shields_broken()
+        if self.temp_flags.get("abilities_ignored"):
+            return 1
+        hyper = HYPER_MODE.get(self.definition.slug)
+        if hyper and self.hyper_mode_released:
+            return hyper["breaker"]
+        return BREAKER_COUNTS.get(self.definition.slug) or self.definition.shields_broken()
 
     def set_flag(self, flag: str, value: bool = True) -> None:
         self.temp_flags[flag] = value
@@ -706,8 +737,31 @@ class Creature:
         partial implementation - effects with active_in_phase restrictions will
         only be applied if the creature enters during an active phase.
         """
+        from core.card_scripts import ENTERS_TAPPED, EX_LIFE, OPPONENT_CREATURES_ENTER_TAPPED
+        from core.continuous_rules import controls, has_abilities, sync_ignored_abilities
+        from core.enums import CardType
         from core.global_effects import GlobalEffect, GlobalEffectType
         from core.enums import Phase, TriggerEvent
+
+        sync_ignored_abilities(game_state)
+        # Only on arrival: effects are re-applied later, which must not tap again
+        tapped_by_card = (self.definition.card_type == CardType.CREATURE
+                          and controls(game_state, 1 - self.controller, OPPONENT_CREATURES_ENTER_TAPPED))
+        if ((has_abilities(self) and self.definition.slug in ENTERS_TAPPED or tapped_by_card)
+                and not self.temp_flags.get("put_tapped")):
+            self.temp_flags["put_tapped"] = True
+            self.is_tapped = True
+        # "As you put this creature": part of entering, so it is not a trigger that
+        # could be delayed or stopped
+        if has_abilities(self) and self.definition.slug in EX_LIFE and not self.temp_flags.get("ex_life_used"):
+            self.temp_flags["ex_life_used"] = True
+            owner = game_state.players[self.controller]
+            if owner.deck:
+                from core.zones.cards import ShieldCard
+                shield = ShieldCard(definition=owner.deck.pop(0))
+                owner.note_deck()
+                owner.shield_zone.append(shield)
+                self.temp_flags["ex_life_shield"] = shield.uid
 
         # Inline phase filtering to avoid circular import with engine.action_generator
         def _effect_active_in_phase(effect, phase: Phase) -> bool:
@@ -834,7 +888,13 @@ class Creature:
                 )
                 game_state.global_effects.add(eff)
 
-            elif action == EffectAction.NONE and card_effect.is_replacement_effect():
+            elif (
+                action == EffectAction.NONE
+                and card_effect.is_replacement_effect()
+                # The engine can only "prevent". Assuming it for any other
+                # "instead" text would make the creature impossible to remove.
+                and value.get("action") == "prevent"
+            ):
                 # Replacement effect — register with ReplacementEffectRegistry (rule 609)
                 from engine.replacement import ReplacementEffect
 
@@ -848,7 +908,7 @@ class Creature:
                         source_card_id=self.id,
                         controller=self.controller,
                         condition=card_effect.trigger_condition,
-                        replacement_action=card_effect.effect_value.get("action", "prevent"),
+                        replacement_action="prevent",
                         replacement_value=card_effect.effect_value,
                         applies_to=applies_to,
                     )

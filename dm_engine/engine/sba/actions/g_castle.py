@@ -40,6 +40,10 @@ def _sba_g_castle_shield(state: GameState) -> bool:
             else:
                 remaining_queue.append((queued_player, shield))
         if fired:
+            window = state.effect_stack.shield_break_window
+            if window is not None:
+                kept = {shield.uid for _, shield in remaining_queue}
+                window.standby_shields = [s for s in window.standby_shields if s.uid in kept]
             queue.clear()
             queue.extend(remaining_queue)
 

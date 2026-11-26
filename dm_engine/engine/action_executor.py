@@ -4,11 +4,14 @@ engine/action_executor.py — apply one Action to a copied GameState.
 
 from __future__ import annotations
 
+from core.zones import HandCard
 from core.actions import Action, actions_equal
-from core.enums import ActionType, EffectType, Keyword, Phase
+from core.card_scripts import COUNTERATTACK
+from core.enums import ActionType, CardSubtype, EffectType, Keyword, Phase
 from core.state import AttackContext, GameState, PendingTrigger
 from engine.trigger_resolver import resolve_pending_triggers
 from engine.effect_executor import resolve_choice
+from engine.entry_rules import tap_new_mana
 from engine.action_generator import get_legal_actions
 from engine.battle_resolver import resolve_battle
 from engine.phase_controller import advance_phase
@@ -18,10 +21,13 @@ from engine.zone_mover import (
     combine_king_cells,
     cross_gear_to_creature,
     fortify_shield_with_castle,
+    leave_battle_zone,
+    move_battle_to_graveyard,
     move_hand_to_battle,
     move_hand_to_field,
     move_hand_to_graveyard,
     move_hand_to_mana,
+    move_hand_to_shield,
     move_standby_shield_to_hand,
     tap_mana_for_payment,
 )
@@ -53,6 +59,16 @@ def _apply_twinpact_face(old_def, chars):
     )
 
 
+def _stage_for_summon(state: GameState, player: int, card_uid: str, zone: str) -> None:
+    p_state = state.players[player]
+    cards = p_state.graveyard if zone == "graveyard" else p_state.mana_zone
+    card = next((c for c in cards if c.uid == card_uid), None)
+    if card is None:
+        raise ValueError(f"Card {card_uid} is not in the {zone}")
+    cards.remove(card)
+    p_state.hand.append(HandCard(definition=card.definition, uid=card.uid))
+
+
 _CHOICE_ANSWERS = frozenset({
     ActionType.PASS,
     ActionType.SELECT_YES_NO,
@@ -69,6 +85,7 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
     Triggers queued by the action, including those from state-based actions,
     resolve before this returns, unless an effect needs a player choice.
     """
+    mana_before = [{m.uid for m in p.mana_zone} for p in state.players]
     result = _apply_action(state, action, db=db, validate=validate)
     if (
         result.effect_stack.pending_triggers
@@ -76,7 +93,27 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
         and not result.is_terminal()
     ):
         result = resolve_pending_triggers(result)
+    end_attack_if_removed(result)
+    tap_new_mana(mana_before, result)
     return result
+
+
+def end_attack_if_removed(state: GameState) -> None:
+    """
+    An attack ends at once if the attacker, or the creature being attacked,
+    leaves it (rules 505.6, 505.6a).
+    """
+    ctx = state.attack_context
+    if ctx is None or state.effect_stack.is_waiting_for_choice() or state.current_phase not in (
+        Phase.ATTACK_DECLARE, Phase.BLOCK_DECLARE, Phase.BATTLE, Phase.DIRECT_ATTACK,
+    ):
+        return
+    target_gone = (
+        ctx.is_attacking_creature and not ctx.block_was_declared
+        and state.find_creature_anywhere(ctx.target_uid or "") is None
+    )
+    if state.find_creature_anywhere(ctx.attacker_uid) is None or target_gone:
+        state.turn_info.phase = Phase.END_OF_ATTACK
 
 
 def _apply_action(state: GameState, action: Action, db=None, validate: bool = True) -> GameState:
@@ -117,6 +154,11 @@ def _apply_action(state: GameState, action: Action, db=None, validate: bool = Tr
             shield_player, shield = s.effect_stack.shield_trigger_queue[0]
             move_standby_shield_to_hand(s, shield_player, shield.uid)
             return check_state_based_actions(s)
+        ctx = s.attack_context
+        if (s.current_phase == Phase.BLOCK_DECLARE and ctx is not None
+                and ctx.blocker_uid and not ctx.block_finished):
+            _finish_block(s)  # no more blockers
+            return check_state_based_actions(s)
         if s.current_phase == Phase.BATTLE:
             return resolve_battle(s)
         if s.current_phase == Phase.DIRECT_ATTACK:
@@ -129,7 +171,18 @@ def _apply_action(state: GameState, action: Action, db=None, validate: bool = Tr
         s.record_action(action_type, action.player, action.card_id)
 
     elif action_type == ActionType.SUMMON_CREATURE:
+        for uid in action.get_extra().get("sasagale", ()):
+            move_battle_to_graveyard(s, action.player, uid, reason="effect")
+        offered = action.get_extra().get("fushigiverse")
+        if offered:
+            giver = s.players[action.player].find_creature(offered)
+            leave_battle_zone(s, action.player, giver, reason="fushigiverse", to_zone="mana_zone")
+            s.players[action.player].find_mana(offered).is_tapped = True
         tap_mana_for_payment(s, action.player, action.mana_used)
+        if action.target_zone in ("graveyard", "mana_zone"):
+            # Staged through the hand so every summon enters the same way. The
+            # cost is already paid, so a card in mana may have tapped itself.
+            _stage_for_summon(s, action.player, action.card_uid, action.target_zone)
         hand_card = s.players[action.player].find_in_hand(action.card_uid or "") if action.card_uid else None
         orig_def = hand_card.definition if hand_card else None
         if action.card_uid:
@@ -139,6 +192,8 @@ def _apply_action(state: GameState, action: Action, db=None, validate: bool = Tr
                 action.player,
                 action.card_uid,
                 evolution_base_uid=action.evolution_base_uid,
+                paid_mana=bool(action.mana_used),
+                from_graveyard=action.target_zone == "graveyard",
             )
         else:
             # GR summon from Ultra GR zone
@@ -154,42 +209,38 @@ def _apply_action(state: GameState, action: Action, db=None, validate: bool = Tr
             chars = get_twinpact_characteristics(orig_def, action.twinpact_face)
             creature.definition = _apply_twinpact_face(orig_def, chars)
             creature.twinpact_face = action.twinpact_face
+        if action.get_extra().get("abyss_rush"):
+            creature.has_summoning_sickness = False
+            creature.temp_flags["abyss_rush_turn"] = s.turn_number
+        summoner = s.players[action.player]
+        if summoner.next_creature_discount:
+            # Used up by this summon; the creature may attack this turn
+            summoner.next_creature_discount = 0
+            creature.has_summoning_sickness = False
         s.record_action(action_type, action.player, action.card_id, creature.uid)
 
     elif action_type == ActionType.CAST_SPELL:
         _require_card_uid(action)
         tap_mana_for_payment(s, action.player, action.mana_used)
+        recycled = action.target_zone == "graveyard"
+        if recycled:
+            _stage_for_summon(s, action.player, action.card_uid, "graveyard")
         # Look up the spell card definition before moving it to graveyard
         hand_card = s.players[action.player].find_in_hand(action.card_uid)
         spell_def = hand_card.definition if hand_card else None
-        move_hand_to_graveyard(s, action.player, action.card_uid, reason="cast")
         s.record_action(action_type, action.player, action.card_id)
-        
-        # Fire ON_CAST trigger
-        if hand_card is not None:
-            from core.enums import TriggerEvent
-            from engine.trigger_registry import fire_trigger
-            fire_trigger(s, TriggerEvent.ON_CAST, {
-                "source_uid": hand_card.uid,
-                "source_card_id": hand_card.id,
-                "controller": action.player,
-                "zone": "graveyard",  # spell goes to graveyard after cast
-            }, hand_card.uid)
-        
-        # Queue and resolve spell effects (rules 600-608)
+
+        # Queue the spell's effects (rules 600-608); they resolve when the action ends
         if spell_def is not None:
-            spell_effects = [e for e in spell_def.effects
-                             if e.effect_type == EffectType.SPELL]
-            for effect in spell_effects:
-                trigger = PendingTrigger(
-                    effect=effect,
-                    source_uid=action.card_uid,
-                    source_card_id=action.card_id,
-                    controller=action.player,
-                )
-                s.effect_stack.add_trigger(trigger)
-            if s.effect_stack.pending_triggers:
-                s = resolve_pending_triggers(s)
+            s.players[action.player].hand.remove(hand_card)
+            from engine.shield_break_window import queue_spell_effects
+            face = spell_def
+            if action.get_extra().get("twinpact_spell"):
+                from engine.shield_break_window import spell_side
+                face = spell_side(spell_def)
+            queue_spell_effects(s, action.player, action.card_uid, face,
+                                paid=bool(action.mana_used), card_definition=spell_def,
+                                destination="deck_bottom" if recycled else "graveyard")
 
     elif action_type in (
         ActionType.GENERATE_CROSS_GEAR,
@@ -197,7 +248,8 @@ def _apply_action(state: GameState, action: Action, db=None, validate: bool = Tr
     ):
         _require_card_uid(action)
         tap_mana_for_payment(s, action.player, action.mana_used)
-        battle_card = move_hand_to_battle(s, action.player, action.card_uid)
+        battle_card = move_hand_to_battle(
+            s, action.player, action.card_uid, paid_mana=bool(action.mana_used))
         battle_card.has_summoning_sickness = False
         s.record_action(action_type, action.player, action.card_id, battle_card.uid)
 
@@ -217,10 +269,22 @@ def _apply_action(state: GameState, action: Action, db=None, validate: bool = Tr
 
     elif action_type == ActionType.FORTIFY_CASTLE:
         _require_card_uid(action)
-        if not action.target_uid:
-            raise ValueError("FORTIFY_CASTLE requires target_uid")
+        held = s.players[action.player].find_in_hand(action.card_uid)
         tap_mana_for_payment(s, action.player, action.mana_used)
-        fortify_shield_with_castle(s, action.player, action.card_uid, action.target_uid)
+        if held is not None and held.definition.card_subtype == CardSubtype.G_CASTLE:
+            shield = move_hand_to_shield(s, action.player, action.card_uid)  # rule 822.2a
+            shield.is_face_up = True
+            from core.continuous_rules import queue_ability, sources_of
+            queue_ability(s, shield.definition, "face_up_self", source_uid=shield.uid,
+                          controller=action.player, data={})
+            for watcher in sources_of(s, "face_up_shield"):
+                if watcher.controller == action.player:
+                    queue_ability(s, watcher.definition, "face_up_shield", source_uid=watcher.uid,
+                                  controller=action.player, data={})
+        elif not action.target_uid:
+            raise ValueError("FORTIFY_CASTLE requires target_uid")
+        else:
+            fortify_shield_with_castle(s, action.player, action.card_uid, action.target_uid)
         s.record_action(action_type, action.player, action.card_id, action.target_uid)
 
     elif action_type == ActionType.COMBINE_KING_CREATURE:
@@ -287,22 +351,15 @@ def _apply_action(state: GameState, action: Action, db=None, validate: bool = Tr
         # Move spell from hand to graveyard (cast)
         hand_card = s.players[action.player].find_in_hand(action.card_uid)
         spell_def = hand_card.definition if hand_card else None
-        move_hand_to_graveyard(s, action.player, action.card_uid, reason="cast")
         s.record_action(action_type, action.player, action.card_id)
-        # Queue and resolve spell effects (free, no mana needed)
+        if action.get_extra().get("counterattack"):
+            amount, civilization = COUNTERATTACK[spell_def.slug]
+            s.players[action.player].mana_debts.append((amount, civilization))
+            s.attack_context.counterattack_used = True
         if spell_def is not None:
-            spell_effects = [e for e in spell_def.effects
-                             if e.effect_type == EffectType.SPELL]
-            for effect in spell_effects:
-                trigger = PendingTrigger(
-                    effect=effect,
-                    source_uid=action.card_uid,
-                    source_card_id=action.card_id,
-                    controller=action.player,
-                )
-                s.effect_stack.add_trigger(trigger)
-            if s.effect_stack.pending_triggers:
-                s = resolve_pending_triggers(s)
+            s.players[action.player].hand.remove(hand_card)
+            from engine.shield_break_window import queue_spell_effects
+            queue_spell_effects(s, action.player, action.card_uid, spell_def)
 
     elif action_type == ActionType.USE_OVER_DRIVE:
         _require_card_uid(action)
@@ -321,6 +378,8 @@ def _apply_action(state: GameState, action: Action, db=None, validate: bool = Tr
         creature = s.players[action.player].find_creature(action.card_uid or "")
         if creature is None:
             raise ValueError("Hyperize source not found")
+        if action.target_uid:  # the creature tapped to pay for it
+            s.players[action.player].find_creature(action.target_uid).tap()
         creature.hyper_mode_released = True
         s.record_action(action_type, action.player, action.card_id, creature.uid)
 
@@ -473,28 +532,47 @@ def _declare_attack(state: GameState, action: Action) -> None:
 
 
 def _declare_block(state: GameState, action: Action) -> None:
+    """
+    Use one creature's blocker ability. The defender may use more, one at a
+    time; the attack target is whichever was used last (rules 507.1-507.2).
+    """
     if state.attack_context is None:
         raise ValueError("No attack is in progress")
     blocker = state.players[action.player].find_creature(action.card_uid or "")
     if blocker is None:
         raise ValueError("Blocking creature not found")
     blocker.tap()
-    blocker.is_blocking = True
-    blocker.blocking_uid = state.attack_context.attacker_uid
     state.attack_context.blocker_uid = blocker.uid
     state.attack_context.blocker_player = action.player
     state.attack_context.block_was_declared = True
-    state.turn_info.phase = Phase.BATTLE
     state.record_action(action.action_type, action.player, action.card_id, blocker.uid)
 
-    # Fire ON_BLOCK trigger
+    if not any(
+        a.action_type in (ActionType.DECLARE_BLOCKER, ActionType.DECLARE_GUARDMAN)
+        for a in get_legal_actions(state)
+    ):
+        _finish_block(state)
+
+
+def _finish_block(state: GameState) -> None:
+    """Only the creature used last counts as blocking (rule 507.2a)."""
+    ctx = state.attack_context
+    ctx.block_finished = True
+    state.turn_info.phase = Phase.BATTLE
+    found = state.find_creature_anywhere(ctx.blocker_uid or "")
+    if found is None:
+        return
+    blocker = found[1]
+    blocker.is_blocking = True
+    blocker.blocking_uid = ctx.attacker_uid
+
     from core.enums import TriggerEvent
     from engine.trigger_registry import fire_trigger
     fire_trigger(state, TriggerEvent.ON_BLOCK, {
         "source_uid": blocker.uid,
         "source_card_id": blocker.id,
-        "controller": action.player,
-        "attacker_uid": state.attack_context.attacker_uid,
+        "controller": ctx.blocker_player,
+        "attacker_uid": ctx.attacker_uid,
     }, blocker.uid)
 
 
@@ -546,14 +624,14 @@ def _resolve_g_strike_choice(state: GameState, action: Action) -> None:
         state.record_action(action.action_type, action.player, action.card_id)
         return
 
+    from engine.shield_break_window import close_window_if_done, rules_trigger
     if win is not None and win.phase == "resolve":
         win.resolved_keys.add(f"g_strike:{action.card_uid}:")
-        from engine.shield_break_window import close_window_if_done
         close_window_if_done(state)
-        state.record_action(action.action_type, action.player, action.card_id)
-        return
-
-    move_standby_shield_to_hand(state, action.player, action.card_uid)
+    else:
+        move_standby_shield_to_hand(state, action.player, action.card_uid)
+    state.effect_stack.add_immediate([rules_trigger(
+        "g_strike", action.card_uid, action.card_id or 0, action.player)])
     state.record_action(action.action_type, action.player, action.card_id)
 
 

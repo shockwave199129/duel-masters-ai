@@ -160,6 +160,18 @@ class ManaCard:
 # ── Shield Card ───────────────────────────────────────────────────────────────
 
 @dataclass
+class ResolvingCard:
+    """
+    A spell between being cast and reaching its destination (rule 409.1b). It is
+    not counted as a card in any zone.
+    """
+    definition:  CardDefinition
+    uid:         str
+    destination: str = "graveyard"   # "graveyard" | "deck_bottom"
+    owner:       int | None = None   # when cast by someone who does not own it
+
+
+@dataclass
 class ShieldCard:
     """
     A card in the shield zone.

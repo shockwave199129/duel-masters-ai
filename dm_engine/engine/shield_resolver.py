@@ -4,7 +4,10 @@ engine/shield_resolver.py — shield breaking and direct attack handling.
 
 from __future__ import annotations
 
+from core.card_scripts import BREAKS_TO_GRAVEYARD
+from core.continuous_rules import has_abilities
 from core.enums import Phase
+from core.zones import GraveyardCard
 from core.state import GameState
 from engine.sba_checker import check_state_based_actions
 from engine.zone_mover import move_shield_to_standby
@@ -39,21 +42,38 @@ def resolve_shield_break_choice(state: GameState, first_shield_index: int, actio
         return s
     _, attacker = attacker_result
 
-    # Rule 509.2c: check for multi-breaker player choice
-    break_mode = None
+    # Rule 509.2c: a creature with two breaker abilities chooses one
+    break_mode = ctx.break_mode
     if action is not None:
-        break_mode = action.get_extra().get("break_mode")
+        break_mode = action.get_extra().get("break_mode") or break_mode
     if break_mode == "triple":
         break_count = min(3, d_state.shield_count)
     elif break_mode == "double":
         break_count = min(2, d_state.shield_count)
     else:
         break_count = min(attacker.shields_broken_on_attack(), d_state.shield_count)
-    indices = _shield_indices_for_batch(d_state.shield_count, first_shield_index, break_count)
 
-    # Pop highest indices first so earlier positions stay stable.
-    for idx in sorted(indices, reverse=True):
-        move_shield_to_standby(s, defender, idx)
+    if not 0 <= first_shield_index < d_state.shield_count or first_shield_index in ctx.chosen_shields:
+        raise ValueError(f"Invalid shield index {first_shield_index}")
+    ctx.chosen_shields.append(first_shield_index)
+    ctx.break_mode = break_mode
+    if len(ctx.chosen_shields) < break_count < d_state.shield_count:
+        return s  # still choosing; nothing breaks until all are picked
+    # When every shield will break there is nothing more to choose
+    indices = list(ctx.chosen_shields)
+    indices += [i for i in range(d_state.shield_count) if i not in indices][:break_count - len(indices)]
+
+    # "Your opponent puts that shield into their graveyard instead"
+    if attacker.definition.slug in BREAKS_TO_GRAVEYARD and has_abilities(attacker):
+        for idx in sorted(indices, reverse=True):
+            shield = d_state.shield_zone.pop(idx)
+            d_state.graveyard.insert(0, GraveyardCard(
+                definition=shield.definition, uid=shield.uid,
+                died_from="shield_to_graveyard", died_on_turn=s.turn_number))
+    else:
+        # Pop highest indices first so earlier positions stay stable.
+        for idx in sorted(indices, reverse=True):
+            move_shield_to_standby(s, defender, idx)
 
     ctx.shields_broken += len(indices)
     s.turn_info.phase = Phase.END_OF_ATTACK
@@ -66,6 +86,8 @@ def mark_direct_attack_if_applicable(state: GameState) -> GameState:
     ctx = s.attack_context
     if ctx is None or not ctx.is_attacking_player:
         return s
+    if s.find_creature_anywhere(ctx.attacker_uid) is None:
+        return s  # no attacker, no attack (rule 505.6)
     if s.players[ctx.defending_player].shield_count == 0 and ctx.shields_broken == 0:
         ctx.received_direct_attack = True
         
@@ -83,14 +105,3 @@ def mark_direct_attack_if_applicable(state: GameState) -> GameState:
             }, attacker.uid)
     return s
 
-
-def _shield_indices_for_batch(total: int, first: int, count: int) -> list[int]:
-    if first < 0 or first >= total:
-        raise ValueError(f"Invalid shield index {first}")
-    indices = [first]
-    for idx in range(total):
-        if len(indices) >= count:
-            break
-        if idx != first:
-            indices.append(idx)
-    return indices

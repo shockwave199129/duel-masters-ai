@@ -34,14 +34,20 @@ def resolve_battle(state: GameState) -> GameState:
         return s
     defender_player, defender = defender_result
 
-    # Fire ON_BATTLE trigger (both participants)
+    # "When this battles" abilities resolve before power is compared (701.13a).
+    # If any trigger, stop here; the battle goes on once they have resolved.
     from engine.trigger_registry import fire_trigger
-    fire_trigger(s, TriggerEvent.ON_BATTLE, {
-        "attacker_uid": attacker.uid,
-        "defender_uid": defender.uid,
-        "attacker_player": ctx.attacker_player,
-        "defender_player": defender_player,
-    }, attacker.uid)
+    if not ctx.battle_triggered:
+        ctx.battle_triggered = True
+        waiting = len(s.effect_stack.pending_triggers)
+        fire_trigger(s, TriggerEvent.ON_BATTLE, {
+            "attacker_uid": attacker.uid,
+            "defender_uid": defender.uid,
+            "attacker_player": ctx.attacker_player,
+            "defender_player": defender_player,
+        }, attacker.uid)
+        if len(s.effect_stack.pending_triggers) > waiting:
+            return s
 
     attacker_always_wins = _wins_battles(attacker)
     defender_always_wins = _wins_battles(defender)

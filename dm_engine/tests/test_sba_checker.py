@@ -88,7 +88,7 @@ after = check_state_based_actions(s)
 check("703.4d: Battle loser → destroyed",
       len(after.players[0].graveyard) == 1 and len(after.players[0].battle_zone) == 0)
 
-# ── 703.4e: Cannot attack → tapped ────────────────────────────────────────
+# ── "Can't attack" only stops attacking (703.4e is about God links) ────────────────────────────────────────
 from core.enums import Keyword
 s = bare_state()
 creat = Creature(
@@ -97,8 +97,9 @@ creat = Creature(
 )
 s.players[0].battle_zone = [creat]
 after = check_state_based_actions(s)
-check("703.4e: Cannot attack → tapped",
-      after.players[0].battle_zone[0].is_tapped)
+check("Can't attack: stays untapped but cannot attack",
+      not after.players[0].battle_zone[0].is_tapped
+      and not after.players[0].battle_zone[0].can_attack(ignore_sickness=True))
 
 # ── Cross Gear in battle zone (303.2) — not destroyed when generated ────────
 s = bare_state()

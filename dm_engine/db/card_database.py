@@ -23,6 +23,7 @@ from typing import Any, Optional
 import psycopg2
 import psycopg2.extras
 
+from core.card_scripts import EXTRA_KEYWORDS, scripted_effects
 from core.enums import (
     Civilization, CardType, CardSubtype, Keyword,
     EffectType, TriggerEvent, EffectAction, Zone,
@@ -96,8 +97,28 @@ def _parse_type_and_subtype(
     if ct_lower == "king creature":
         return CardType.CREATURE, CardSubtype.NONE
 
+    # ── Other composite types: "<special type> <card type>" in one column ───────
+    if ct_lower in _COMPOSITE_TYPES:
+        card_type, subtype = _COMPOSITE_TYPES[ct_lower]
+        return card_type, subtype if subtype != CardSubtype.NONE else _card_subtype(cs_raw or None)
+
     # ── Default: use base helpers ─────────────────────────────────────────────
     return _card_type(ct_raw), _card_subtype(cs_raw or None)
+
+
+_COMPOSITE_TYPES: dict[str, tuple[CardType, CardSubtype]] = {
+    "neo creature": (CardType.CREATURE, CardSubtype.NEO),
+    "g-neo creature": (CardType.CREATURE, CardSubtype.G_NEO),
+    "star max evolution creature": (CardType.CREATURE, CardSubtype.STAR_MAX),
+    "star evolution creature": (CardType.CREATURE, CardSubtype.EVOLUTION),
+    "dream creature": (CardType.CREATURE, CardSubtype.DREAM),
+    "exile creature": (CardType.CREATURE, CardSubtype.EXILE),
+    "gacharange creature": (CardType.CREATURE, CardSubtype.GACHARANGE),
+    "d2 field": (CardType.FIELD, CardSubtype.D2),
+    "historic field": (CardType.FIELD, CardSubtype.NONE),
+    "galaxy castle": (CardType.CASTLE, CardSubtype.G_CASTLE),
+    "orega aura": (CardType.AURA, CardSubtype.NONE),
+}
 
 def _keyword(s: str) -> Optional[Keyword]:
     mapping = {k.value.lower(): k for k in Keyword}
@@ -484,8 +505,14 @@ class CardDatabase:
                     card_subtype=csubtype,
                     civilizations=frozenset(civs_by_card.get(cid, [])),
                     races=frozenset(races_by_card.get(cid, [])),
-                    keywords=frozenset(keywords_by_card.get(cid, [])),
-                    effects=tuple(effects_by_card.get(cid, [])),
+                    keywords=frozenset(keywords_by_card.get(cid, []))
+                    | frozenset(EXTRA_KEYWORDS.get(row["slug"] or "", ())),
+                    # Hand-written abilities replace the parsed ones
+                    effects=(
+                        scripted
+                        if (scripted := scripted_effects(row["slug"] or "", cid)) is not None
+                        else tuple(effects_by_card.get(cid, []))
+                    ),
                     evolution_source_races=frozenset(
                         evo_by_card.get(cid, {}).get("races", set())
                     ),

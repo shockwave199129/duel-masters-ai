@@ -39,6 +39,8 @@ class PendingTrigger:
     controller:      int            # player who controls the source
     trigger_data:    dict = field(default_factory=dict)  # context (e.g. "broke shield N")
     priority:        int = -1       # APNAP player-declared priority (-1 = not set, lower = earlier)
+    # Part of a card being used right now (rule 601.1g): resolves before anything else
+    immediate:       bool = False
 
     def __repr__(self) -> str:
         return (
@@ -73,6 +75,7 @@ class AwaitedChoice:
     max_choices:    int = 1
     prompt:         str = ""        # human-readable description
     trigger:        Any = None      # the paused PendingTrigger, resumed by the answer
+    option_cards:   dict = field(default_factory=dict)  # option id -> card id, if visible
 
     def __repr__(self) -> str:
         return (
@@ -101,6 +104,8 @@ class ShieldBreakWindow:
     emblems_added:         list[str] = field(default_factory=list)
     pending_resolutions:   list[tuple[str, str, str]] = field(default_factory=list)
     resolved_keys:         set[str] = field(default_factory=set)
+    # An older window waiting while newly broken shields are dealt with (101.4g)
+    parent:                Optional["ShieldBreakWindow"] = None
     # pending_resolutions entries: (kind, primary_uid, secondary_uid)
 
 
@@ -134,17 +139,32 @@ class EffectStack:
         """Backward-compatible alias for older trigger queue call sites."""
         self.add_trigger(trigger)
 
-    def pop_next_trigger(self) -> Optional[PendingTrigger]:
+    def add_immediate(self, triggers: list[PendingTrigger]) -> None:
+        """Put the effects of a card being used ahead of everything waiting."""
+        for trigger in triggers:
+            trigger.immediate = True
+        self.pending_triggers[0:0] = triggers
+
+    def sort_pending(self, active_player: int) -> None:
         """
-        Rule 101.4a: APNAP ordering.
-        priority 0 = S-Trigger (first)
-        priority 1 = active player's standby triggers
-        priority 2 = non-active player's standby triggers
-        priority -1 = unassigned legacy fallback (treated as last)
+        Order waiting effects: a card being used first, then the turn player's,
+        then the other player's (rules 101.4, 603.3). An explicit priority, if
+        set, is used instead of the player order.
         """
+        def key(trigger: PendingTrigger) -> tuple[int, int]:
+            if trigger.immediate:
+                return (0, 0)
+            if trigger.priority >= 0:
+                return (1, trigger.priority)
+            return (1, 1 if trigger.controller == active_player else 2)
+
+        self.pending_triggers.sort(key=key)
+
+    def pop_next_trigger(self, active_player: int = 0) -> Optional[PendingTrigger]:
+        """Remove and return the effect that resolves next."""
         if not self.pending_triggers:
             return None
-        self.pending_triggers.sort(key=lambda t: t.priority if t.priority >= 0 else 999)
+        self.sort_pending(active_player)
         return self.pending_triggers.pop(0)
 
     def set_choice(self, choice: AwaitedChoice) -> None:
@@ -200,6 +220,17 @@ class AttackContext:
     ninja_strike_used:      bool = False
     ninja_strike_card_uid:  Optional[str] = None
 
+    # Shields picked so far by a creature that breaks several (rule 509.3)
+    chosen_shields:     list[int] = field(default_factory=list)
+    break_mode:         Optional[str] = None
+    counterattack_used: bool = False
+
+    # Blocking is not final until the defender has no more blockers to use (507.1)
+    block_finished:     bool = False
+
+    # "When this battles" abilities have been given their chance (rule 701.13a)
+    battle_triggered:   bool = False
+
     # Set only when the attack actually reaches the defending player while
     # they have no shields. Breaking the last shield is not a direct attack.
     received_direct_attack: bool = False
@@ -230,6 +261,8 @@ class TurnInfo:
     turn_number:     int   = 1
     active_player:   int   = 0    # 0 or 1
     phase:           Phase = Phase.START_OF_TURN
+    # "At the end of the turn" abilities have triggered; the turn has not ended yet
+    turn_end_triggered: bool = False
 
     # First player doesn't draw on turn 1
     first_player:    int   = 0
@@ -334,6 +367,11 @@ class GameState:
     # Last N actions only — keep small for MCTS performance
     history:        list[ActionRecord] = field(default_factory=list)
     max_history:    int = 20
+
+    # ── Card names a player may declare ("choose a creature card name") ───────
+    # name -> card id. Should cover more than this game's two decks where possible,
+    # so the list does not tell a player what the opponent is playing.
+    nameable_creatures: dict = field(default_factory=dict)
 
     # ── Game ID (for logging) ─────────────────────────────────────────────────
     game_id:        str = ""

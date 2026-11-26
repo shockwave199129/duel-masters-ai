@@ -1,6 +1,7 @@
 """engine/cards/effect_actions/movement.py — Card draw, summon, and zone placement effects."""
 from __future__ import annotations
 
+from engine.entry_rules import may_enter
 from core.state import GameState, PendingTrigger
 from core.cards import CardDefinition
 from core.zones import Creature, HandCard, ManaCard, ShieldCard
@@ -73,7 +74,11 @@ def _do_summon_free(state: GameState, controller: int, trigger: PendingTrigger) 
 
 
 def _do_put_to_battle_zone(state: GameState, controller: int, trigger: PendingTrigger) -> None:
-    _do_summon_free(state, controller, trigger)
+    data = _trigger_data(trigger)
+    card_uid = data.get("card_uid")
+    if card_uid and may_enter(state, controller, from_hand=True, played=False):
+        move_hand_to_battle(state, controller, card_uid, summoned=False,
+                            evolution_base_uid=data.get("evolution_base_uid"))
 
 
 

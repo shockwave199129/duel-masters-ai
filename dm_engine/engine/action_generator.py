@@ -44,6 +44,7 @@ import itertools
 import re
 from typing import Optional
 
+from core.continuous_rules import spells_locked
 from core.enums import (
     Phase, ActionType, Civilization, Keyword,
     CardType, CardSubtype, ManaUsage, EffectAction, EffectType,
@@ -88,7 +89,35 @@ from engine.turn.action_gen import (
 )
 
 
+_SPELL_ACTIONS = frozenset({
+    ActionType.CAST_SPELL, ActionType.USE_SHIELD_TRIGGER, ActionType.USE_ATTACK_CHANCE,
+    ActionType.USE_S_BACK, ActionType.USE_SABAKI_Z,
+})
+
+
+def _casts_locked_spell(state, action) -> bool:
+    if action.action_type not in _SPELL_ACTIONS or not spells_locked(state, action.player):
+        return False
+    if action.action_type == ActionType.USE_SHIELD_TRIGGER and not action.choice:
+        return False  # declining is always allowed
+    player = state.players[action.player]
+    window = state.effect_stack.shield_break_window
+    held = [*player.hand, *(window.standby_shields if window else [])]
+    card = next((c for c in held if c.uid == action.card_uid), None)
+    return card is not None and card.definition.is_spell()
+
+
 def get_legal_actions(state: GameState, db=None) -> list[Action]:
+    """
+    Return every legal action for the player who must act right now.
+
+    See _actions_for_state for the phase rules. Spells are removed here while a
+    card stops the player casting them.
+    """
+    return [a for a in _actions_for_state(state, db) if not _casts_locked_spell(state, a)]
+
+
+def _actions_for_state(state: GameState, db=None) -> list[Action]:
     """
     Return every legal action for the player who must act right now.
 

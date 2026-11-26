@@ -95,7 +95,8 @@ def run_self_play_games_parallel(
             result = _worker_run(payloads[0])
             summaries.append(SelfPlaySummary(**result["summary"]))
         else:
-            with mp.Pool(processes=len(payloads)) as pool:
+            context = mp.get_context("spawn" if kwargs.get("device") == "cuda" else None)
+            with context.Pool(processes=len(payloads)) as pool:
                 for result in pool.map(_worker_run, payloads):
                     summaries.append(SelfPlaySummary(**result["summary"]))
 

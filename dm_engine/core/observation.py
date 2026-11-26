@@ -47,6 +47,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from .card_scripts import OPPONENT_HAND_REVEALED
+from .continuous_rules import controls
 from .enums import Civilization, Phase
 from .cards import CardDefinition
 from .zones import ManaCard, Creature
@@ -206,8 +208,9 @@ class ObservedPlayerState:
         """
         is_self = (player_state.player_index == observer_player)
 
-        # Hand
-        if is_self:
+        # Hand: also public while a card makes this player show it
+        shown = controls(game_state, 1 - player_state.player_index, OPPONENT_HAND_REVEALED)
+        if is_self or shown:
             hand_cards = [ObservedCard.known(c.definition) for c in player_state.hand]
         else:
             # Opponent hand: only count visible, not contents

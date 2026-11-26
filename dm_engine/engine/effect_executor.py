@@ -7,11 +7,13 @@ import random
 from dataclasses import replace
 
 from core.cards import CardDefinition, CardEffect, is_hyper_mode
+from core.continuous_rules import can_be_chosen
 from core.actions import Action
 from core.enums import ActionType
 from core.enums import EffectAction, CardSubtype, Civilization, ManaUsage
 from core.state import AwaitedChoice, GameState, PendingTrigger
 from core.zones import Creature, HandCard, ManaCard, ShieldCard, PowerModifier
+from engine.card_script_runner import run_script
 from engine.god_manager import GodManager
 from engine.action_generator import _get_mana_combinations
 from engine.sba_checker import check_state_based_actions
@@ -97,7 +99,17 @@ def resolve_choice(state: GameState, action: Action) -> GameState:
     s.currently_resolving_effect = False
     s.record_action(action.action_type, action.player, action.card_id, action.target_uid)
 
+    if choice.choice_type == "order_effects":
+        # The chosen effect goes to the front and resolves next
+        index = int(str(action.target_uid).split(":")[1])
+        s.effect_stack.add_immediate([s.effect_stack.pending_triggers.pop(index)])
+        return s
+
     trigger = choice.trigger
+    if trigger is not None and trigger.effect.effect_value.get("script"):
+        # A script continues even when the player picks nothing
+        picked = None if action.action_type == ActionType.PASS else action.target_uid
+        return execute_pending_trigger(s, replace(trigger, trigger_data={**trigger.trigger_data, "picked": picked}))
     declined = action.action_type == ActionType.PASS or (
         choice.choice_type == "yes_no" and not action.choice
     )
@@ -137,6 +149,12 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
     
     effect = trigger.effect
     controller = trigger.controller
+
+    if effect.effect_value.get("script"):
+        if not run_script(s, trigger):
+            return s  # waiting for a player; resolution stays in progress
+        s.currently_resolving_effect = False
+        return check_state_based_actions(s)
 
     # Check if this effect needs a player choice before resolving
     choice_type = _effect_needs_choice(effect, trigger.trigger_data)
@@ -394,6 +412,8 @@ def _collect_target_options(
             for creature in p.battle_zone:
                 # Skip if protected from effect source
                 if creature.is_protected_from(effect_source_civ, effect_source_race):
+                    continue
+                if not can_be_chosen(state, creature, player):
                     continue
                 targets.append(creature.uid)
     elif zone == "shield_zone":

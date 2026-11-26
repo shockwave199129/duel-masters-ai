@@ -557,22 +557,16 @@ check("9d: G-Castle in hand generates fortify actions",
       len(fortify_actions_9d) >= 1,
       f"found {len(fortify_actions_9d)} fortify actions")
 
-# 9e) G-Castle can target a specific shield
-if fortify_actions_9d:
-    target_uids_9e = [a.target_uid for a in fortify_actions_9d]
-    check("9e: G-Castle fortify targets a specific shield",
-          shield_9d.uid in target_uids_9e,
-          f"targets={target_uids_9e}, shield_uid={shield_9d.uid}")
-else:
-    check("9e: G-Castle fortify targets a specific shield", False, "no fortify actions generated")
+# 9e) Rule 822.2b: a G Castle does not fortify an existing shield
+check("9e: G-Castle names no shield to fortify",
+      bool(fortify_actions_9d) and all(not a.target_uid for a in fortify_actions_9d))
 
-# 9f) G-Castle cannot fortify without shields
+# 9f) Rule 822.2a: it becomes a new shield, so no shields are needed
 state_9f = make_state(p0_hand=[g_castle_hand])
+state_9f.players[0].mana_zone.append(mana_9d)
 actions_9f = _actions_for_hand_card(0, g_castle_hand.uid, g_castle_hand_defn, state_9f)
-fortify_actions_9f = [a for a in actions_9f if a.action_type == ActionType.FORTIFY_CASTLE]
-check("9f: G-Castle cannot fortify without shields",
-      len(fortify_actions_9f) == 0,
-      f"found {len(fortify_actions_9f)} fortify actions (expected 0)")
+check("9f: G-Castle can be used with no shields",
+      any(a.action_type == ActionType.FORTIFY_CASTLE for a in actions_9f))
 
 # 9g) G-Castle fortify places castle under shield
 shield_9g = ShieldCard(definition=card(905, "Shield 9g", card_type=CardType.CREATURE))

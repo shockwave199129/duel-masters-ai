@@ -5,35 +5,13 @@ Rule 703: State-Based Actions — automated board cleanup that occurs after
 every action resolution. These SBAs are missing from the current codebase.
 
 Implemented:
-  - 703.4e: Creature with "cannot attack" → must be tapped
   - 703.4f: Cross Gear not attached to creature → destroyed
   - 703.4g: Aura/Fortress not attached to creature → graveyard
   - 703.4m: Weapon standalone → graveyard
 """
 
-from core.enums import CardType, Keyword
+from core.enums import CardType
 from core.state import GameState
-
-
-def _sba_cannot_attack_tap(state: GameState) -> bool:
-    """
-    Rule 703.4e: If a creature is in the Battle Zone and has the "cannot attack"
-    keyword, it must be tapped. This prevents illegal attacks.
-
-    Returns True if any creature was tapped by this SBA.
-    """
-    fired = False
-
-    for player_idx in range(2):
-        for creature in list(state.players[player_idx].battle_zone):
-            # Check if creature has "cannot attack" keyword
-            if creature.is_ignored:
-                continue
-            if creature.has_keyword(Keyword.CANNOT_ATTACK) and not creature.is_tapped:
-                creature.is_tapped = True
-                fired = True
-
-    return fired
 
 
 def _sba_cross_gear_standalone(state: GameState) -> bool:

@@ -29,7 +29,7 @@ from bot.state_encoder import (
 from core.actions import Action
 from core.enums import GameResult
 from core.state import GameState
-from core.initializer import initialize_game
+from core.initializer import add_nameable_creatures, initialize_game
 from decks.prebuilt import _apply_extra_zones, prebuilt_deck_from_dict
 from engine.action_executor import execute_action
 from engine.game_runner import validate_invariants
@@ -554,6 +554,9 @@ def _load_self_play_state(
     )
     _apply_extra_zones(state, 0, p0)
     _apply_extra_zones(state, 1, p1)
+    if use_database_decks:
+        # Every training deck, not only the two in this game
+        add_nameable_creatures(state, [spec.main_deck for spec in deck_pool.decks.values()])
     return state, deck_slots, deck_ids, deck_names, actual_first_player
 
 

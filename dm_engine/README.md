@@ -461,8 +461,11 @@ top-scoring move. Data recorded by earlier versions has different probabilities,
 so generate new data before training.
 
 Training uses the GPU when PyTorch can see one (`--device auto|cuda|cpu`, or
-`TRAIN_DEVICE` in the pipeline). Self-play and evaluation stay on the CPU, with
-2 threads per process unless `OMP_NUM_THREADS` is set. For RTX 50 series cards,
+`TRAIN_DEVICE` in the pipeline). `run_self_play.py`, `eval_bots.py` and
+`play_neural_game.py` default to the CPU and accept `--device cpu|cuda|auto`.
+Only the neural model moves to the GPU; the game rules stay on the CPU, and each
+parallel worker uses its own GPU memory, so time both before a long run. CPU use
+is capped at 2 threads per process unless `OMP_NUM_THREADS` is set. For RTX 50 series cards,
 see `requirements-gpu.txt`. Larger batches, such as `--batch-size 512`, make
 better use of the GPU.
 
@@ -550,6 +553,47 @@ The engine is still incomplete. Important known gaps include:
 - ✅ Whole-stack destroy with proper trigger semantics (rule 109.2b, 316.3).
 - ✅ Underlying card characteristics ignored (rule 200.3a).
 
-See `dm_engine/tests/test_evolution_rules.py` for smoke tests covering stack management, NEO state, and replacement detection.
+See `dm_engine/tests/test_evolution_rules.py` for smoke tests covering stack management, NEO state, and replacement detection, and `tests/test_rulebook_flow.py` for turn, attack, spell, effect-order and G-NEO rules.
+
+**Known gaps against the comprehensive rulebook**:
+
+- When creatures leave at the same time, replacement choices are asked one by one instead of turn player first, then applied together (rules 609.8, 609.9).
+- Abilities that need a declaration (Ninja Strike, Attack Chance, Counterattack) are offered together, not in the rule 506.3b-e order.
+- Gods, Psychic, Dragheart, GR, Forbidden, King Cell, Zero Dragon, Duelmate and WD Field structures have partial or no support.
 
 When adding new features, write focused rule tests and cite the relevant rule numbers in comments or test names where useful.
+
+## Scripted cards
+
+Some cards need several steps or choices that one parsed effect cannot express.
+Their abilities are written in `core/card_scripts.py` and replace the parsed
+effects; `engine/card_script_runner.py` runs the steps. Printed abilities that
+are not implemented yet are listed in `UNSUPPORTED` and do nothing. When you add
+or change an ability, add a case to `tests/test_card_scripts.py`.
+"Leave ... instead" abilities are listed in `LEAVE_REPLACEMENTS` and handled by
+`engine/leave_rules.py`.
+
+### Repairing stored card text
+
+`crawler/scripts/refresh_card_text.py` reads card pages again and replaces only
+the stored ability text. Cards that would lose any text are held for review, and
+the old rows are backed up before anything is written.
+
+```bash
+python crawler/scripts/refresh_card_text.py fetch --all    # slow; can be resumed
+python crawler/scripts/refresh_card_text.py compare        # writes nothing
+python crawler/scripts/refresh_card_text.py apply
+python crawler/scripts/refresh_card_text.py restore data/reports/card_text_refresh/backup_<time>.json
+```
+
+### Card text translator (trial, not used by the engine yet)
+
+`core/card_text.py` turns printed card text into the same data the hand scripts
+use. A card counts only if every sentence is understood. "Complete" does not
+prove the meaning is right: check new rules against real card text.
+
+```bash
+python dm_engine/scripts/translate_cards.py --decks    # compare with the hand scripts
+python dm_engine/scripts/translate_cards.py --all --sample 50
+python dm_engine/scripts/translate_cards.py --run dm_engine/tests/test_card_scripts.py
+```

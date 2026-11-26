@@ -6,5 +6,5 @@ that changes during play: tapped status, power modifications,
 which shields are revealed, etc.
 """
 
-from .cards import _new_uid, HandCard, HyperspatialCard, ManaCard, ShieldCard, GraveyardCard
+from .cards import _new_uid, HandCard, HyperspatialCard, ManaCard, ShieldCard, GraveyardCard, ResolvingCard
 from .creature import PowerModifier, EvolutionStackEntry, Creature

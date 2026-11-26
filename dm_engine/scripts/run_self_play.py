@@ -16,6 +16,7 @@ if str(DM_ENGINE_ROOT) not in sys.path:
 import thread_limits  # noqa: F401  # must come before torch is imported
 from db.card_database import CardDatabase
 from rules import RuleKnowledgeService
+from training.device import play_device
 from training.self_play import run_self_play_games
 from training.self_play_parallel import run_self_play_games_parallel
 
@@ -56,6 +57,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epsilon", type=float, default=0.05)
     parser.add_argument("--first-player", type=int, choices=[0, 1], default=0)
     parser.add_argument("--model-path", type=Path, default=None)
+    parser.add_argument(
+        "--device",
+        choices=["cpu", "cuda", "auto"],
+        default="cpu",
+        help="Where the neural bots run. Game rules always run on the CPU, so the GPU may not be faster",
+    )
     parser.add_argument("--bot-p0", default="neural", help="Bot spec for player 0")
     parser.add_argument("--bot-p1", default="neural", help="Bot spec for player 1")
     parser.add_argument(
@@ -108,6 +115,9 @@ def main() -> None:
     if not args.dsn:
         parser.error("--dsn is required unless DATABASE_URL is set in crawler/.env")
 
+    device = play_device(parser, args.device)
+    logger.info("Neural bots run on %s", device)
+
     db = CardDatabase(args.dsn)
     if not args.use_db_decks:
         db.load()
@@ -139,6 +149,7 @@ def main() -> None:
         allow_mirror_matches=args.allow_mirror_matches,
         policy_encoder_version=args.encoder_version,
         record_encoder_version=args.record_encoder_version,
+        device=device,
     )
     if args.workers > 1:
         summary = run_self_play_games_parallel(
