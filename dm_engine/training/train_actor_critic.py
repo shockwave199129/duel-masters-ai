@@ -18,8 +18,11 @@ from bot.neural_model import (
     DEFAULT_NUM_BLOCKS,
     save_model,
 )
-from training.device import autocast, get_device, optimizer_step
-from training.train_action_score import _load_grouped_dataset, collate_decisions, score_legal_actions
+from training.compact_data import DecisionBatches, load_compact
+from training.device import autocast, get_device, optimizer_step, warmup
+from training.train_action_score import (
+    _load_grouped_dataset, _normalize_state_action_row, collate_decisions, score_legal_actions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,8 @@ def train_actor_critic_model(
     entropy_coef: float = 0.0,
     balance_players: bool = True,
     device: str = "auto",
+    data_on_gpu: bool = False,
+    warmup_steps: int = 0,
 ) -> ActorCriticSummary:
     if policy_loss_mode not in {"pairwise", "mse"}:
         raise ValueError("policy_loss_mode must be 'pairwise' or 'mse'")
@@ -60,16 +65,26 @@ def train_actor_critic_model(
 
     torch.manual_seed(seed)
     train_device = get_device(device)
-    dataset = _load_grouped_dataset(input_path, balance_players=balance_players, seed=seed)
-    if not any(float(item[5]) > 0 for item in dataset.items):
+    if data_on_gpu:
+        dataset = load_compact(
+            input_path, device=train_device, balance_players=balance_players, seed=seed,
+            normalize=_normalize_state_action_row)
+        logger.info("Training data on %s: %s decisions, %.2f GB",
+                    train_device.type, len(dataset), dataset.bytes_used() / 1e9)
+        any_won = bool((dataset.value > 0).any())
+        loader = DecisionBatches(dataset, batch_size, seed=seed)
+    else:
+        dataset = _load_grouped_dataset(input_path, balance_players=balance_players, seed=seed)
+        any_won = any(float(item[5]) > 0 for item in dataset.items)
+        loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=collate_decisions,
+            pin_memory=train_device.type == "cuda",
+        )
+    if not any_won:
         logger.warning("No decisions from a won game in %s; the policy has nothing to reinforce", input_path)
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=collate_decisions,
-        pin_memory=train_device.type == "cuda",
-    )
     input_size = dataset.state_size + dataset.action_size
     model = ActionCriticNet(
         input_size=input_size,
@@ -86,6 +101,7 @@ def train_actor_critic_model(
 
     final_loss = policy_loss = value_loss = entropy = 0.0
     model.train()
+    step = 0
     for epoch in range(epochs):
         started = time.perf_counter()
         running_loss = running_policy = running_value = running_entropy = 0.0
@@ -119,7 +135,9 @@ def train_actor_critic_model(
             entropy_value = -(torch.softmax(scores, dim=-1) * log_probs).sum(dim=-1).mean()
             loss = policy_loss_value + value_coef * value_loss_value - entropy_coef * entropy_value
 
+            warmup(optimizer, lr, step, warmup_steps)
             optimizer_step(model, optimizer, loss)
+            step += 1
 
             running_loss += float(loss.item())
             running_policy += float(policy_loss_value.item())

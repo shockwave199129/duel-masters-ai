@@ -36,6 +36,13 @@ def autocast(device: torch.device):
     return torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda")
 
 
+def warmup(optimizer: torch.optim.Optimizer, base_lr: float, step: int, warmup_steps: int) -> None:
+    """Raise the learning rate evenly over the first steps; large batches need this."""
+    if warmup_steps > 0:
+        for group in optimizer.param_groups:
+            group["lr"] = base_lr * min(1.0, (step + 1) / warmup_steps)
+
+
 def optimizer_step(model: torch.nn.Module, optimizer: torch.optim.Optimizer, loss: torch.Tensor) -> None:
     optimizer.zero_grad(set_to_none=True)
     loss.backward()

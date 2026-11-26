@@ -47,6 +47,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not equalize decision counts between player 0 and player 1",
     )
+    parser.add_argument(
+        "--data-on-gpu", action="store_true",
+        help="Keep the whole training set on the training device (uses more GPU memory)",
+    )
+    parser.add_argument(
+        "--warmup-steps", type=int, default=0,
+        help="Raise the learning rate evenly over this many steps (for large batches)",
+    )
     return parser
 
 
@@ -73,6 +81,8 @@ def main() -> None:
         value_coef=args.value_coef,
         entropy_coef=args.entropy_coef,
         balance_players=not args.no_balance_players,
+        data_on_gpu=args.data_on_gpu,
+        warmup_steps=args.warmup_steps,
     )
     logger.info(
         "Training done: rows=%s epochs=%s final_loss=%.6f policy=%.6f value=%.6f entropy=%.6f output=%s",

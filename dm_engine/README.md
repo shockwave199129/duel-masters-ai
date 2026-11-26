@@ -586,6 +586,14 @@ python crawler/scripts/refresh_card_text.py apply
 python crawler/scripts/refresh_card_text.py restore data/reports/card_text_refresh/backup_<time>.json
 ```
 
+### Using more GPU memory while training
+
+`--data-on-gpu` keeps the whole training set on the GPU (`pairwise` and
+`distillation` losses, and the actor-critic trainer). It stores each state once,
+so it also needs far less system memory. A larger `--batch-size` uses more GPU
+memory; add `--warmup-steps` with large batches. More memory in use does not by
+itself make a better model: compare models by their results.
+
 ### Card text translator (trial, not used by the engine yet)
 
 `core/card_text.py` turns printed card text into the same data the hand scripts

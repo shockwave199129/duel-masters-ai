@@ -24,7 +24,8 @@ from bot.neural_model import (
     save_model,
 )
 from bot.state_encoder import OBSERVATION_VECTOR_SIZE_V2, OBSERVATION_VECTOR_SIZE_V3
-from training.device import autocast, get_device, optimizer_step
+from training.compact_data import DecisionBatches, PairBatches, load_compact
+from training.device import autocast, get_device, optimizer_step, warmup
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +392,8 @@ def train_action_score_model(
     ranking_margin: float = 0.10,
     balance_players: bool = True,
     device: str = "auto",
+    data_on_gpu: bool = False,
+    warmup_steps: int = 0,
 ) -> TrainSummary:
     """Train and save an ActionScoreNet checkpoint."""
     if epochs < 1:
@@ -405,7 +408,14 @@ def train_action_score_model(
     train_device = get_device(device)
     pin = train_device.type == "cuda"
     loader_kwargs = {"balance_players": balance_players, "seed": seed}
-    if loss_mode == "pairwise":
+    if data_on_gpu:
+        if loss_mode not in {"pairwise", "distillation"}:
+            raise ValueError("data_on_gpu supports the pairwise and distillation losses")
+        dataset = load_compact(
+            input_path, device=train_device, normalize=_normalize_state_action_row, **loader_kwargs)
+        logger.info("Training data on %s: %s decisions, %.2f GB",
+                    train_device.type, len(dataset), dataset.bytes_used() / 1e9)
+    elif loss_mode == "pairwise":
         dataset = _load_pairwise_dataset(input_path, **loader_kwargs)
     elif loss_mode == "distillation":
         dataset = _load_grouped_dataset(input_path, **loader_kwargs)
@@ -413,7 +423,11 @@ def train_action_score_model(
         dataset = _load_blended_dataset(input_path, **loader_kwargs)
     else:
         dataset = _load_jsonl_dataset(input_path, **loader_kwargs)
-    if loss_mode == "distillation":
+    if data_on_gpu:
+        kind = PairBatches if loss_mode == "pairwise" else DecisionBatches
+        loader = kind(dataset, batch_size, seed=seed)
+        input_size = dataset.state_size + dataset.action_size
+    elif loss_mode == "distillation":
         loader = DataLoader(
             dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_decisions, pin_memory=pin
         )
@@ -437,6 +451,7 @@ def train_action_score_model(
     final_loss = 0.0
 
     model.train()
+    step = 0
     for epoch in range(epochs):
         started = time.perf_counter()
         running_loss = 0.0
@@ -464,7 +479,9 @@ def train_action_score_model(
                     predictions = model(batch_features).float().squeeze(-1)
                     loss = bce_loss_fn(predictions, batch_targets)
 
+            warmup(optimizer, lr, step, warmup_steps)
             optimizer_step(model, optimizer, loss)
+            step += 1
 
             running_loss += float(loss.item())
             batches += 1
@@ -478,7 +495,7 @@ def train_action_score_model(
     output.parent.mkdir(parents=True, exist_ok=True)
     save_model(model, output)
     return TrainSummary(
-        rows=len(dataset),
+        rows=loader.pairs if data_on_gpu and loss_mode == "pairwise" else len(dataset),
         epochs=epochs,
         final_loss=final_loss,
         output_path=output,
