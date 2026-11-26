@@ -29,18 +29,25 @@ class NeuralBot:
         seed: int | None = None,
         encoder_version: int | None = None,
         rule_service=None,
+        device: str | torch.device | None = None,
     ):
         if model is not None and model_path is not None:
             raise ValueError("Pass either model or model_path, not both")
+        # CPU by default: one small forward pass per move does not repay GPU transfer
+        resolved_device = torch.device(device or "cpu")
+        if resolved_device.type == "cuda" and not torch.cuda.is_available():
+            resolved_device = torch.device("cpu")
         if model is not None:
             self.model = model
         elif model_path is not None:
-            self.model = load_model(model_path)
+            self.model = load_model(model_path, device=resolved_device)
         elif encoder_version == 2:
             self.model = ActionScoreNet(input_size=MODEL_INPUT_SIZE_V2)
         else:
             self.model = ActionScoreNet()
+        self.model.to(resolved_device)
         self.model.eval()
+        self.device = resolved_device
         self.epsilon = epsilon
         self.rng = random.Random(seed)
         self.rule_service = rule_service
@@ -92,7 +99,7 @@ class NeuralBot:
                 for action in actions
             ]
         with torch.no_grad():
-            inputs = torch.tensor(rows, dtype=torch.float32)
+            inputs = torch.tensor(rows, dtype=torch.float32, device=self.device)
             scores = self.model(inputs).squeeze(-1)
             best_index = int(torch.argmax(scores).item())
             policy_probs = torch.softmax(scores, dim=-1)
@@ -129,7 +136,7 @@ class NeuralBot:
                 for action in actions
             ]
         with torch.no_grad():
-            inputs = torch.tensor(rows, dtype=torch.float32)
+            inputs = torch.tensor(rows, dtype=torch.float32, device=self.device)
             return [float(score) for score in self.model(inputs).view(-1).tolist()]
 
     def explain_action_score(self, state: GameState, action: Action, score: float | None = None) -> str:

@@ -20,6 +20,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install dependencies
+        run: |
+          # CPU-only PyTorch first, so CI does not download the CUDA build
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt ruff
+
+      - name: Check for undefined names
+        run: |
+          python -m ruff check --select F821 dm_engine rules_ingest crawler
+
       - name: Compile Python sources
         run: |
           python -m compileall dm_engine rules_ingest crawler/scripts

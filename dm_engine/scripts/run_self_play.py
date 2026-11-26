@@ -13,6 +13,7 @@ PROJECT_ROOT = DM_ENGINE_ROOT.parent
 if str(DM_ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(DM_ENGINE_ROOT))
 
+import thread_limits  # noqa: F401  # must come before torch is imported
 from db.card_database import CardDatabase
 from rules import RuleKnowledgeService
 from training.self_play import run_self_play_games
@@ -51,7 +52,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--games", type=int, default=15)
     parser.add_argument("--preset", choices=sorted(GAME_PRESETS), default=None, help="Use a standard v2 game count: quick=50, standard=100, large=500")
     parser.add_argument("--seed-start", type=int, default=1)
-    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--max-steps", type=int, default=1000, help="Stop a game after this many actions and count it as unfinished")
     parser.add_argument("--epsilon", type=float, default=0.05)
     parser.add_argument("--first-player", type=int, choices=[0, 1], default=0)
     parser.add_argument("--model-path", type=Path, default=None)

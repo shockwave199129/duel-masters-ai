@@ -1,7 +1,9 @@
 """Test Step 4: TODO 10 zone operations (evolve/cross/fortify/deploy/swap/flip)."""
 
 import sys
-sys.path.insert(0, "/home/riki/Downloads/dm-files/dm_engine")
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.state import GameState, TurnInfo, AttackContext, PendingTrigger
 from core.enums import (

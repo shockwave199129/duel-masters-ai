@@ -50,32 +50,28 @@ def blend_targets(value_target: float, heuristic_target: float, terminal_weight:
     return _clamp(weight * value_target + (1.0 - weight) * heuristic_target)
 
 
-def _row_metric(row: object, key: str, default: float = 0.0) -> float:
-    if isinstance(row, dict):
-        return float(row.get(key, default))
-    return default
-
-
-def step_reward(prev_state, next_state, player: int) -> float:
+def trajectory_rewards(
+    rows: list[dict],
+    *,
+    terminal_weight: float = 1.0,
+    shaping_weight: float = 0.25,
+) -> list[float]:
     """
-    Lightweight per-step reward for PPO.
+    Rewards for one player's decisions in one finished game, in step order.
 
-    Supports either GameState objects or recorded JSONL decision rows. The
-    row-based path keeps PPO usable offline without requiring engine replay.
+    All rows must belong to the same player, because heuristic_target and
+    value_target are written from the acting player's point of view. Each step
+    earns the change in that player's heuristic value; the last step earns the
+    game outcome instead. The shaped terms sum to at most 2 * shaping_weight in
+    size, so with the defaults the winner's total is positive and the loser's
+    is negative.
     """
-    if isinstance(prev_state, GameState) and isinstance(next_state, GameState):
-        me_prev = prev_state.players[player]
-        opp_prev = prev_state.players[1 - player]
-        me_next = next_state.players[player]
-        opp_next = next_state.players[1 - player]
-        shield_delta = (opp_prev.shield_count - opp_next.shield_count) * 0.10
-        creature_delta = (me_next.battle_zone_count - opp_next.battle_zone_count) * 0.05
-        mana_delta = (me_next.mana_count - opp_next.mana_count) * 0.02
-        hand_delta = (me_next.hand_count - opp_next.hand_count) * 0.03
-        return _clamp(shield_delta + creature_delta + mana_delta + hand_delta, -0.5, 0.5)
-
-    prev_heuristic = _row_metric(prev_state, "heuristic_target")
-    next_heuristic = _row_metric(next_state, "heuristic_target")
-    prev_value = _row_metric(prev_state, "value_target")
-    next_value = _row_metric(next_state, "value_target")
-    return _clamp((next_heuristic - prev_heuristic) + 0.25 * (next_value - prev_value), -0.5, 0.5)
+    if not rows:
+        return []
+    heuristics = [float(row.get("heuristic_target", 0.0)) for row in rows]
+    rewards = [
+        shaping_weight * (after - before)
+        for before, after in zip(heuristics, heuristics[1:])
+    ]
+    rewards.append(terminal_weight * float(rows[-1].get("value_target", 0.0)))
+    return rewards

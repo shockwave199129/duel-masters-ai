@@ -42,7 +42,8 @@ load_env_file "${BASE_DIR}/crawler/.env"
 
 GENERATIONS=1   # how many generations to train
 PROMOTION_THRESHOLD="0.52"
-TRAIN_MODE="${TRAIN_MODE:-ppo}"
+# PPO stays opt-in until self-play move sampling matches what PPO assumes
+TRAIN_MODE="${TRAIN_MODE:-action_score}"
 SELF_PLAY_PRESET="${SELF_PLAY_PRESET:-quick}"
 SELF_PLAY_WORKERS="${SELF_PLAY_WORKERS:-1}"
 SELF_PLAY_GAMES="${SELF_PLAY_GAMES:-}"
@@ -51,7 +52,7 @@ EVAL_OPPONENTS="${EVAL_OPPONENTS:-heuristic}"
 CLEAN_START="${CLEAN_START:-0}"
 
 GEN=0
-PREV_MODEL=""   # empty → use the built-in gen-0 bot
+PREV_MODEL="${INIT_MODEL:-}"   # empty → use the built-in gen-0 bot
 
 if [[ "${CLEAN_START}" == "1" ]]; then
     rm -f "${DATA_DIR}"/gen*_v3_games.jsonl
@@ -97,7 +98,12 @@ while (( GEN < GENERATIONS )); do
     echo "=== Training generation ${NEXT_GEN} model (${TRAIN_MODE}) ==="
     if [[ "${TRAIN_MODE}" == "ppo" ]]; then
         TRAIN_OUTPUT="${MODEL_DIR}/gen${NEXT_GEN}_v3_ppo.pt"
-        python dm_engine/scripts/train_ppo.py \
+        # Continue from the model that generated this generation's self-play data
+        INIT_ARGS=()
+        if [[ -n "${PREV_MODEL}" ]]; then
+            INIT_ARGS=(--init-checkpoint "${PREV_MODEL}")
+        fi
+        python dm_engine/scripts/train_ppo.py ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} \
             --input "${SELF_PLAY_OUTPUT}" \
             --output "${TRAIN_OUTPUT}" \
             --epochs 4 \

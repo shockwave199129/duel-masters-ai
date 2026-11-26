@@ -13,9 +13,14 @@ from engine.action_executor import execute_action
 from engine.action_generator import get_legal_actions, _get_over_drive_requirements, _over_drive_mana_combos
 
 
+FAILURES: list[str] = []
+
+
 def check(name: str, condition: bool, detail: str = "") -> bool:
     status = "✅ PASS" if condition else "❌ FAIL"
     print(f"{status}: {name}" + (f" - {detail}" if detail else ""))
+    if not condition:
+        FAILURES.append(name)
     return condition
 
 
@@ -134,3 +139,7 @@ if od_actions:
     check("Over Drive not offered twice", len(od_after) == 0)
 
 print("\n" + "=" * 70)
+
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+    sys.exit(1)

@@ -247,9 +247,13 @@ def load_model(
     hidden_size: int = DEFAULT_HIDDEN_SIZE,
     num_blocks: int = DEFAULT_NUM_BLOCKS,
     dropout: float = DEFAULT_DROPOUT,
+    device: str | torch.device | None = None,
 ) -> nn.Module:
     """Load a saved action-scoring model."""
-    checkpoint = torch.load(Path(path), map_location="cpu")
+    resolved_device = torch.device(device or "cpu")
+    if resolved_device.type == "cuda" and not torch.cuda.is_available():
+        resolved_device = torch.device("cpu")
+    checkpoint = torch.load(Path(path), map_location=resolved_device)
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         state_dict = checkpoint["state_dict"]
         if checkpoint.get("model") == "ActionScoreNet" or _is_legacy_state_dict(state_dict):
@@ -265,7 +269,7 @@ def load_model(
                 num_blocks=int(checkpoint.get("num_blocks", num_blocks)),
                 dropout=float(checkpoint.get("dropout", dropout)),
             )
-            model.load_state_dict(state_dict, strict=False)
+            model.load_state_dict(state_dict)
         else:
             input_size = int(checkpoint.get("input_size", MODEL_INPUT_SIZE))
             model = ActionScoreNet(
@@ -278,5 +282,31 @@ def load_model(
     else:
         model = LegacyActionScoreNet(hidden_size=128)
         model.load_state_dict(checkpoint)
+    model.to(resolved_device)
     model.eval()
+    return model
+
+
+def load_actor_critic_init(path: str | Path) -> ActionCriticNet:
+    """
+    Load a checkpoint as the starting point for actor-critic training.
+
+    An actor-critic checkpoint is loaded as is. An action-score checkpoint
+    supplies every shared layer, and only the value head starts fresh.
+    """
+    base = load_model(path)
+    if isinstance(base, ActionCriticNet):
+        return base
+    if not isinstance(base, ActionScoreNet):
+        raise ValueError(f"{path} is a legacy checkpoint and cannot initialize an actor-critic model")
+    model = ActionCriticNet(
+        input_size=base.input_size,
+        hidden_size=base.hidden_size,
+        num_blocks=base.num_blocks,
+        dropout=base.dropout,
+    )
+    missing, unexpected = model.load_state_dict(base.state_dict(), strict=False)
+    shared_missing = [key for key in missing if not key.startswith(("value_proj.", "value_head."))]
+    if shared_missing or unexpected:
+        raise ValueError(f"{path} does not match: missing={shared_missing} unexpected={list(unexpected)}")
     return model

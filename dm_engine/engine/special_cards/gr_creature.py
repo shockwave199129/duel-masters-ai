@@ -1,5 +1,6 @@
 """engine/special_cards/gr_creature.py — GR Creature card mechanics."""
 from __future__ import annotations
+from core.cards import CardDefinition
 from core.state import GameState
 from core.zones import Creature, _new_uid
 

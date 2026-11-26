@@ -1,6 +1,7 @@
 """engine/cards/effect_actions/zone_ops.py — Card movement and zone operation effects."""
 from __future__ import annotations
 
+from core.cards import CardDefinition
 from core.state import GameState, PendingTrigger
 from core.zones import Creature, HandCard, ManaCard, ShieldCard
 from engine.zone_mover import (

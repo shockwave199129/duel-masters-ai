@@ -17,7 +17,7 @@ from bot.neural_model import (
     DEFAULT_NUM_BLOCKS,
     save_model,
 )
-from training.train_action_score import _load_grouped_dataset
+from training.train_action_score import _load_grouped_dataset, collate_decisions
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +57,10 @@ def train_actor_critic_model(
 
     torch.manual_seed(seed)
     dataset = _load_grouped_dataset(input_path, balance_players=balance_players, seed=seed)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    input_size = int(dataset.tensors[1].shape[-1] + dataset.tensors[0].shape[-1])
+    if not any(float(item[5]) > 0 for item in dataset.items):
+        logger.warning("No decisions from a won game in %s; the policy has nothing to reinforce", input_path)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_decisions)
+    input_size = dataset.state_size + dataset.action_size
     model = ActionCriticNet(
         input_size=input_size,
         hidden_size=hidden_size,
@@ -73,7 +75,8 @@ def train_actor_critic_model(
     for epoch in range(epochs):
         running_loss = running_policy = running_value = running_entropy = 0.0
         batches = 0
-        for batch_state, batch_actions, batch_policy, batch_blended, batch_heuristic, batch_value in loader:
+        for batch in loader:
+            batch_state, batch_actions, batch_policy, batch_blended, batch_heuristic, batch_value, action_mask = batch
             batch_targets = {
                 "blended_target": batch_blended,
                 "heuristic_target": batch_heuristic,
@@ -83,16 +86,23 @@ def train_actor_critic_model(
             state_expanded = batch_state.unsqueeze(1).expand(-1, action_count, -1)
             merged = torch.cat([state_expanded, batch_actions], dim=-1).reshape(batch_size_ * action_count, -1)
             scores = model.forward_policy(merged).reshape(batch_size_, action_count)
+            scores = scores.masked_fill(~action_mask, -1e9)
+            log_probs = torch.log_softmax(scores, dim=-1)
+            values = model.forward_value(batch_state).squeeze(-1)
             if policy_loss_mode == "pairwise":
                 chosen = batch_policy.argmax(dim=-1, keepdim=True)
                 chosen_scores = scores.gather(1, chosen)
-                margin_loss = torch.relu(1.0 - (chosen_scores - scores)).masked_fill(batch_policy.bool(), 0.0)
-                policy_loss_value = margin_loss.sum(dim=-1).mean()
+                margin_loss = torch.relu(1.0 - (chosen_scores - scores))
+                margin_loss = margin_loss.masked_fill(batch_policy.bool() | ~action_mask, 0.0)
+                decision_loss = margin_loss.sum(dim=-1)
             else:
-                policy_loss_value = -(batch_policy.clamp(min=1e-8) * torch.log_softmax(scores, dim=-1)).sum(dim=-1).mean()
-            values = model.forward_value(batch_state).squeeze(-1)
+                decision_loss = -(batch_policy * log_probs.masked_fill(~action_mask, 0.0)).sum(dim=-1)
+            # Reinforce a move by how much the game went better than predicted.
+            # Clipped at zero: a negative weight would make these losses unbounded.
+            advantage_weight = (batch_value - values.detach()).clamp(min=0.0)
+            policy_loss_value = (advantage_weight * decision_loss).mean()
             value_loss_value = mse_loss_fn(values, batch_targets)
-            entropy_value = -(torch.softmax(scores, dim=-1) * torch.log_softmax(scores, dim=-1)).sum(dim=-1).mean()
+            entropy_value = -(torch.softmax(scores, dim=-1) * log_probs).sum(dim=-1).mean()
             loss = policy_loss_value + value_coef * value_loss_value - entropy_coef * entropy_value
 
             optimizer.zero_grad()

@@ -1,7 +1,9 @@
 """Test Step 7: SHIELDIFY (701.32, 113.1)."""
 
 import sys
-sys.path.insert(0, "/home/riki/Downloads/dm-files/dm_engine")
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine.zone_mover import move_hand_to_battle  # noqa: F401 — avoid circular import
 

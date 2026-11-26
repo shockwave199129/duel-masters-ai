@@ -3,7 +3,7 @@ from __future__ import annotations
 from core.enums import CardType, CardSubtype, GlobalEffectType
 from core.state import GameState
 from core.zones import Creature
-from core.zones import GraveyardCard
+from core.zones import GraveyardCard, ShieldCard
 from core.cards import is_g_castle
 
 

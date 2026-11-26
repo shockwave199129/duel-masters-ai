@@ -488,6 +488,7 @@ from engine.cards.effect_actions import (  # noqa: E402
     _do_dragon_evasion,
     _do_dragon_soul_evasion,
     _do_draw,
+    _do_dragsolve,
     _do_evolve,
     _do_forbidden_explosion,
     _do_forbidden_flip,

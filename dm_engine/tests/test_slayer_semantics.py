@@ -4,6 +4,7 @@ test_slayer_semantics.py — Slayer revenge-on-loss mechanic tests.
 Tests the Slayer keyword (OCG): when a Slayer creature loses a battle,
 the opposing creature is also destroyed via Slayer's revenge-on-loss.
 """
+import sys
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -163,3 +164,6 @@ if passed < total:
         if not ok:
             print(f"    FAIL: {name} — {detail}")
 print(f"{'='*60}")
+
+if not all(ok for _, ok, _ in results):
+    sys.exit(1)

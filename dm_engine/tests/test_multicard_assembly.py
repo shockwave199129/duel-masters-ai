@@ -1,7 +1,9 @@
 """Test Step 6: multi-card assembly (Forbidden Explosion + Zerom Birth)."""
 
 import sys
-sys.path.insert(0, "/home/riki/Downloads/dm-files/dm_engine")
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Load zone_mover first to avoid special_cards ↔ zone_mover circular import.
 from engine.zone_mover import move_hand_to_battle  # noqa: F401

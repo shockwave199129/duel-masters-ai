@@ -7,6 +7,7 @@ Tests that resolve_shield_break_choice:
   3. Correctly breaks 2 shields when action has break_mode "double"
   4. Correctly breaks 1 shield (default) when action has no break_mode
 """
+import sys
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -147,3 +148,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+if not all(ok for _, ok, _ in results):
+    sys.exit(1)

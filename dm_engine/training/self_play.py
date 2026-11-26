@@ -235,7 +235,7 @@ def run_recorded_game(
     game_id: str,
     game_index: int = 0,
     seat_flip: bool = False,
-    max_steps: int | None = None,
+    max_steps: int | None = 1000,
     epsilon: float = 0.05,
     first_player: int | None = 0,
     model_path: str | Path | None = None,
@@ -247,6 +247,7 @@ def run_recorded_game(
     policy_encoder_version: int | None = None,
     record_encoder_version: int = 3,
     rule_service=None,
+    device: str | None = None,
 ) -> tuple[GameState, int]:
     """Run one neural-vs-neural game and append finalized decision rows."""
     rng = random.Random(seed)
@@ -264,8 +265,20 @@ def run_recorded_game(
     )
     seat_specs = bot_specs or ("neural", "neural")
     bots = {
-        0: make_bot(seat_specs[0], seed=seed, rule_service=rule_service, model_path=model_path),
-        1: make_bot(seat_specs[1], seed=seed + 1, rule_service=rule_service, model_path=model_path),
+        0: make_bot(
+            seat_specs[0],
+            seed=seed,
+            rule_service=rule_service,
+            model_path=model_path,
+            device=device,
+        ),
+        1: make_bot(
+            seat_specs[1],
+            seed=seed + 1,
+            rule_service=rule_service,
+            model_path=model_path,
+            device=device,
+        ),
     }
     decision_count = 0
 
@@ -324,6 +337,14 @@ def run_recorded_game(
                 break
             step += 1
 
+        if max_steps is not None and step >= max_steps and not state.is_terminal():
+            logger.warning(
+                "%s hit the step limit (max_steps=%s, seed=%s); counted as unfinished",
+                game_id,
+                max_steps,
+                seed,
+            )
+
         with raw_path.open("r", encoding="utf-8") as f:
             for line in f:
                 if line.strip():
@@ -360,6 +381,7 @@ def run_self_play_games(
     policy_encoder_version: int | None = None,
     record_encoder_version: int = 3,
     rule_service=None,
+    device: str | None = None,
 ) -> SelfPlaySummary:
     """Run and record several neural-vs-neural games."""
     output = Path(output_path)
@@ -377,7 +399,7 @@ def run_self_play_games(
 
     for index in range(games):
         seed = seed_start + index
-        game_id = f"gen0-v3-{index + 1:06d}"
+        game_id = f"gen0-v3-{seed:06d}"  # seed is unique across parallel workers
         seat_flip = randomize_seating and _balanced_bit(index, seat_offset) == 1
         scheduled_first_player = first_player
         if randomize_seating:
@@ -412,6 +434,7 @@ def run_self_play_games(
             policy_encoder_version=policy_encoder_version,
             record_encoder_version=record_encoder_version,
             rule_service=rule_service,
+            device=device,
         )
         decisions += decisions_written
         winner = _winner_from_result(state.result)

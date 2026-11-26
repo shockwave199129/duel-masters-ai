@@ -12,9 +12,16 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from bot.neural_model import ActionCriticNet, DEFAULT_DROPOUT, DEFAULT_HIDDEN_SIZE, DEFAULT_NUM_BLOCKS, save_model
+from bot.neural_model import (
+    ActionCriticNet,
+    DEFAULT_DROPOUT,
+    DEFAULT_HIDDEN_SIZE,
+    DEFAULT_NUM_BLOCKS,
+    load_actor_critic_init,
+    save_model,
+)
 from training.replay_buffer import ReplayBuffer, Transition
-from training.rewards import step_reward
+from training.rewards import trajectory_rewards
 
 logger = logging.getLogger(__name__)
 
@@ -53,54 +60,50 @@ def _read_rows(path: str | Path) -> list[dict[str, Any]]:
 
 
 def build_replay_buffer_from_jsonl(path: str | Path, *, capacity: int = 100_000) -> ReplayBuffer:
-    rows = _read_rows(path)
     buffer = ReplayBuffer(capacity=capacity)
-    by_game: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        by_game.setdefault(str(row.get("game_id", "unknown")), []).append(row)
-
-    for game_rows in by_game.values():
-        game_rows.sort(key=lambda row: int(row.get("step", 0)))
-        for index, row in enumerate(game_rows):
-            next_row = game_rows[index + 1] if index + 1 < len(game_rows) else row
-            reward = step_reward(row, next_row, int(row.get("player", 0)))
-            done = bool(row.get("terminal", False))
+    for episode in _build_episodes_from_jsonl(path):
+        for item in episode:
             buffer.add(
                 Transition(
-                    state_features=[float(v) for v in row.get("state_features", [])],
-                    legal_action_features=[
-                        [float(v) for v in action]
-                        for action in row.get("legal_action_features", [])
-                    ],
-                    chosen_index=int(row.get("chosen_index", -1)),
-                    reward=reward,
-                    done=done,
-                    player=int(row.get("player", 0)),
-                    value_target=float(row.get("value_target", 0.0)),
-                    behavior_log_prob=(
-                        float(row["behavior_log_prob"])
-                        if row.get("behavior_log_prob") is not None
-                        else None
-                    ),
+                    state_features=item.state_features,
+                    legal_action_features=item.legal_action_features,
+                    chosen_index=item.chosen_index,
+                    reward=item.reward,
+                    done=item.done,
+                    player=item.player,
+                    value_target=item.value_target,
+                    behavior_log_prob=item.behavior_log_prob,
                 )
             )
     return buffer
 
 
 def _build_episodes_from_jsonl(path: str | Path) -> list[list[PPOTransitionBatch]]:
-    rows = _read_rows(path)
-    by_game: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        by_game.setdefault(str(row.get("game_id", "unknown")), []).append(row)
+    """
+    Build one episode per player per finished game.
+
+    The two players' rows are never mixed: each is scored from its own point of
+    view, and only a player's last decision ends the episode. Unfinished games
+    have no outcome to learn from, so they are left out.
+    """
+    # Seed is part of the key so reused game ids with different seeds stay apart
+    trajectories: dict[tuple[str, str, int], list[dict[str, Any]]] = {}
+    unfinished: set[tuple[str, str]] = set()
+    for row in _read_rows(path):
+        game = (str(row.get("game_id", "unknown")), str(row.get("seed", "")))
+        if not row.get("terminal", False):
+            unfinished.add(game)
+            continue
+        trajectories.setdefault((*game, int(row.get("player", 0))), []).append(row)
+    if unfinished:
+        logger.warning("Left %s unfinished game(s) out of PPO training", len(unfinished))
 
     episodes: list[list[PPOTransitionBatch]] = []
-    for game_rows in by_game.values():
-        game_rows.sort(key=lambda row: int(row.get("step", 0)))
-        episode: list[PPOTransitionBatch] = []
-        for index, row in enumerate(game_rows):
-            next_row = game_rows[index + 1] if index + 1 < len(game_rows) else row
-            reward = step_reward(row, next_row, int(row.get("player", 0)))
-            episode.append(
+    for (_, _, player), rows in trajectories.items():
+        rows.sort(key=lambda row: int(row.get("step", 0)))
+        rewards = trajectory_rewards(rows)
+        episodes.append(
+            [
                 PPOTransitionBatch(
                     state_features=[float(v) for v in row.get("state_features", [])],
                     legal_action_features=[
@@ -109,8 +112,8 @@ def _build_episodes_from_jsonl(path: str | Path) -> list[list[PPOTransitionBatch
                     ],
                     chosen_index=int(row.get("chosen_index", -1)),
                     reward=reward,
-                    done=bool(row.get("terminal", False)),
-                    player=int(row.get("player", 0)),
+                    done=index == len(rows) - 1,
+                    player=player,
                     value_target=float(row.get("value_target", 0.0)),
                     behavior_log_prob=(
                         float(row["behavior_log_prob"])
@@ -118,8 +121,9 @@ def _build_episodes_from_jsonl(path: str | Path) -> list[list[PPOTransitionBatch
                         else None
                     ),
                 )
-            )
-        episodes.append(episode)
+                for index, (row, reward) in enumerate(zip(rows, rewards))
+            ]
+        )
     return episodes
 
 
@@ -144,6 +148,12 @@ def _pad_actions(
         padded[index, :count] = actions
         mask[index, :count] = True
     return padded, mask
+
+
+def _normalize_advantages(advantages: torch.Tensor) -> torch.Tensor:
+    if advantages.numel() < 2:
+        return advantages
+    return (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
 
 
 def _compute_gae(
@@ -209,26 +219,37 @@ def train_ppo(
     value_coef: float = 0.5,
     entropy_coef: float = 0.01,
     seed: int = 1,
+    init_checkpoint: str | Path | None = None,
 ) -> PPOTrainSummary:
     torch.manual_seed(seed)
     episodes = _build_episodes_from_jsonl(input_path)
     transitions = [transition for episode in episodes for transition in episode]
     if not transitions:
-        raise ValueError(f"No transitions found in {input_path}")
+        raise ValueError(f"No transitions from finished games found in {input_path}")
 
     states = torch.tensor([t.state_features for t in transitions], dtype=torch.float32)
     rewards = torch.tensor([t.reward for t in transitions], dtype=torch.float32)
     dones = torch.tensor([t.done for t in transitions], dtype=torch.bool)
 
     max_action_dim = max(len(action) for t in transitions for action in t.legal_action_features)
-    model = ActionCriticNet(
-        input_size=int(states.shape[-1] + max_action_dim),
-        hidden_size=hidden_size,
-        num_blocks=num_blocks,
-        dropout=dropout,
-    )
+    input_size = int(states.shape[-1] + max_action_dim)
+    if init_checkpoint is None:
+        model = ActionCriticNet(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_blocks=num_blocks,
+            dropout=dropout,
+        )
+    else:
+        # The checkpoint decides the architecture; size arguments are ignored
+        model = load_actor_critic_init(init_checkpoint)
+        if model.input_size != input_size:
+            raise ValueError(
+                f"{init_checkpoint} expects input size {model.input_size}, but the data has {input_size}"
+            )
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     loader = DataLoader(list(range(len(transitions))), batch_size=batch_size, shuffle=True)
+    model.eval()
     with torch.no_grad():
         values = model.forward_value(states).squeeze(-1)
         advantages, returns = _compute_episode_gae(episodes, values, gamma=gamma, lam=0.95)
@@ -253,7 +274,7 @@ def train_ppo(
         for batch_indices in loader:
             batch_indices = batch_indices.long()
             batch_states = states[batch_indices]
-            batch_advantages = advantages[batch_indices]
+            batch_advantages = _normalize_advantages(advantages[batch_indices])
             batch_returns = returns[batch_indices]
             batch_chosen = torch.tensor([transitions[i].chosen_index for i in batch_indices.tolist()], dtype=torch.long)
             batch_actions_list = [

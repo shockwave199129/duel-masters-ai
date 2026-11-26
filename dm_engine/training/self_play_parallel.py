@@ -48,9 +48,9 @@ def _worker_run(payload: dict[str, Any]) -> dict[str, Any]:
     return {"summary": summary.__dict__, "shard_path": str(shard_path)}
 
 
-def _merge_shards(shard_paths: list[Path], output_path: Path) -> None:
+def _merge_shards(shard_paths: list[Path], output_path: Path, *, overwrite: bool = False) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as out_f:
+    with output_path.open("w" if overwrite else "a", encoding="utf-8") as out_f:
         for shard_path in shard_paths:
             if not shard_path.exists():
                 continue
@@ -99,6 +99,10 @@ def run_self_play_games_parallel(
                 for result in pool.map(_worker_run, payloads):
                     summaries.append(SelfPlaySummary(**result["summary"]))
 
-        _merge_shards(shard_paths, Path(kwargs["output_path"]))
+        _merge_shards(
+            shard_paths,
+            Path(kwargs["output_path"]),
+            overwrite=bool(kwargs.get("overwrite", False)),
+        )
 
     return _merge_summaries(summaries)

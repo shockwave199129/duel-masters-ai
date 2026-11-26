@@ -11,7 +11,8 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from bot.action_encoder import ACTION_VECTOR_SIZE_V2, ACTION_VECTOR_SIZE_V3
 from bot.neural_model import (
@@ -173,12 +174,49 @@ def _load_jsonl_dataset(
     return TensorDataset(feature_tensor, target_tensor)
 
 
+class GroupedDecisionDataset(Dataset):
+    """One item per decision; each keeps its own number of legal actions."""
+
+    def __init__(self, items: list[tuple[torch.Tensor, ...]]):
+        self.items = items
+        self.state_size = int(items[0][0].shape[0])
+        self.action_size = int(items[0][1].shape[1])
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
+        return self.items[index]
+
+
+def collate_decisions(batch: list[tuple[torch.Tensor, ...]]) -> tuple[torch.Tensor, ...]:
+    """
+    Pad legal actions to the largest count in this batch.
+
+    Returns (states, actions, policy, blended, heuristic, value, action_mask).
+    action_mask is True for real actions and False for padding.
+    """
+    states, actions, policies, blended, heuristic, value = zip(*batch)
+    counts = torch.tensor([action.shape[0] for action in actions])
+    padded_actions = pad_sequence(list(actions), batch_first=True)
+    action_mask = torch.arange(padded_actions.shape[1]).unsqueeze(0) < counts.unsqueeze(1)
+    return (
+        torch.stack(states),
+        padded_actions,
+        pad_sequence(list(policies), batch_first=True),
+        torch.stack(blended),
+        torch.stack(heuristic),
+        torch.stack(value),
+        action_mask,
+    )
+
+
 def _load_grouped_dataset(
     path: str | Path,
     *,
     balance_players: bool = True,
     seed: int = 1,
-) -> TensorDataset:
+) -> GroupedDecisionDataset:
     rows = _load_decision_rows(path, balance_players=balance_players, seed=seed)
 
     state_rows: list[list[float]] = []
@@ -214,13 +252,12 @@ def _load_grouped_dataset(
     if not state_rows:
         raise ValueError(f"No training rows found in {path}")
 
-    return TensorDataset(
-        torch.tensor(state_rows, dtype=torch.float32),
-        torch.tensor(action_rows, dtype=torch.float32),
-        torch.tensor(policy_rows, dtype=torch.float32),
-        torch.tensor(blended_rows, dtype=torch.float32),
-        torch.tensor(heuristic_rows, dtype=torch.float32),
-        torch.tensor(value_rows, dtype=torch.float32),
+    def as_tensor(value) -> torch.Tensor:
+        return torch.tensor(value, dtype=torch.float32)
+
+    columns = (state_rows, action_rows, policy_rows, blended_rows, heuristic_rows, value_rows)
+    return GroupedDecisionDataset(
+        [tuple(as_tensor(value) for value in item) for item in zip(*columns)]
     )
 
 
@@ -349,8 +386,12 @@ def train_action_score_model(
         dataset = _load_blended_dataset(input_path, **loader_kwargs)
     else:
         dataset = _load_jsonl_dataset(input_path, **loader_kwargs)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    input_size = int(dataset.tensors[0].shape[1])
+    if loss_mode == "distillation":
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_decisions)
+        input_size = dataset.state_size + dataset.action_size
+    else:
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        input_size = int(dataset.tensors[0].shape[1])
     model = ActionScoreNet(
         input_size=input_size,
         hidden_size=hidden_size,
@@ -374,13 +415,13 @@ def train_action_score_model(
                 other_scores = model(batch_other).squeeze(-1)
                 loss = ranking_loss_fn(chosen_scores, other_scores, batch_labels)
             elif loss_mode == "distillation":
-                batch_state, batch_actions, batch_policy, *_rest = batch
+                batch_state, batch_actions, batch_policy, *_rest, action_mask = batch
                 batch_size, action_count, _ = batch_actions.shape
                 state_expanded = batch_state.unsqueeze(1).expand(-1, action_count, -1)
                 merged = torch.cat([state_expanded, batch_actions], dim=-1).reshape(batch_size * action_count, -1)
                 scores = model(merged).reshape(batch_size, action_count)
-                log_probs = torch.log_softmax(scores, dim=-1)
-                loss = -(batch_policy.clamp(min=1e-8) * log_probs).sum(dim=-1).mean()
+                log_probs = torch.log_softmax(scores.masked_fill(~action_mask, -1e9), dim=-1)
+                loss = -(batch_policy * log_probs.masked_fill(~action_mask, 0.0)).sum(dim=-1).mean()
             elif loss_mode == "blended":
                 batch_features, batch_targets = batch
                 predictions = model(batch_features).squeeze(-1)

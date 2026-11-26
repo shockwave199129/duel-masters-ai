@@ -10,10 +10,15 @@ from core.cards import CardDefinition
 from core.enums import CardType, CardSubtype
 
 
+FAILURES: list[str] = []
+
+
 def check(name: str, condition: bool, detail: str = "") -> bool:
     """Print PASS/FAIL."""
     status = "✅ PASS" if condition else "❌ FAIL"
     print(f"{status}: {name}" + (f" - {detail}" if detail else ""))
+    if not condition:
+        FAILURES.append(name)
     return condition
 
 
@@ -300,3 +305,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("All Gods core tests completed")
     print("=" * 60)
+
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+    sys.exit(1)

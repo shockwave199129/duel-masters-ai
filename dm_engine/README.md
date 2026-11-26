@@ -448,7 +448,12 @@ python dm_engine/scripts/train_ppo.py \
   --output dm_engine/models/gen1_v3_ppo.pt
 ```
 
-The training pipeline can switch modes with `TRAIN_MODE`:
+The training pipeline can switch modes with `TRAIN_MODE`. The default is
+`action_score`. PPO is opt-in for now: self-play does not yet sample moves the
+way PPO assumes, which weakens what it learns from bad moves. To continue from
+an existing model, set `INIT_MODEL` to its path; it generates the self-play data
+and, in `ppo` mode, is the starting point for training (`--init-checkpoint` when
+running `train_ppo.py` directly). PPO skips unfinished games.
 
 ```bash
 TRAIN_MODE=ppo bash dm_engine/scripts/run_training_pipeline.sh
