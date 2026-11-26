@@ -1,7 +1,6 @@
 """engine/sba/actions/seal_removal.py — State-based action: Rule 116.4 — seal removal."""
 from __future__ import annotations
 from core.state import GameState
-from core.zones import Creature
 from core.zones import GraveyardCard
 
 

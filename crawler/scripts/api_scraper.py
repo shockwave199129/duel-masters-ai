@@ -24,6 +24,7 @@ from scripts.scraper import (
     _finalize_raw_card,
     _parse_civilizations,
     _split_card_type,
+    card_civilizations,
     parse_card_page,
     save_card_to_db,
 )
@@ -128,10 +129,11 @@ def _split_template_params(block: str) -> dict[str, str]:
     current: list[str] = []
     depth = 0
     for ch in inner:
-        if ch == "{":
+        # A "|" inside a template or a [[page|label]] link is not a separator
+        if ch in "{[":
             depth += 1
             current.append(ch)
-        elif ch == "}":
+        elif ch in "}]":
             depth = max(0, depth - 1)
             current.append(ch)
         elif ch == "|" and depth == 0:
@@ -206,7 +208,7 @@ def parse_cardtable_wikitext(
     card_subtype = primary["card_subtype"]
     cost = primary["cost"]
     power = primary["power"]
-    civilizations = sorted({c for face in faces for c in face["civilizations"]})
+    civilizations = card_civilizations(faces)
     races = sorted({r for face in faces for r in face["races"]})
     abilities = [ab for face in faces for ab in face["abilities"]]
     flavor = primary.get("flavor_text")

@@ -6,7 +6,6 @@ corresponding whitelist (or vice‑versa), the script will exit with status 1.
 """
 
 import sys
-import os
 from pathlib import Path
 
 # Ensure the crawler scripts directory is on the import path so we can import

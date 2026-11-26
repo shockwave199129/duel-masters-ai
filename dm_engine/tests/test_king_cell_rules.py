@@ -14,7 +14,6 @@ from core.enums import CardType, Civilization, Phase
 from core.zones import Creature, HandCard, ManaCard, _new_uid
 from core.state import GameState, TurnInfo
 from core.player_state import PlayerState
-from core.actions import combine_king_creature, ManaUsage
 from core.enums import ActionType
 from engine.zone_mover import combine_king_cells, tap_mana_for_payment
 from engine.sba_checker import check_state_based_actions
@@ -181,6 +180,9 @@ solo_p0 = PlayerState(
     deck_composition={},
 )
 solo_p1 = PlayerState(player_index=1, player_name="P1", deck_composition={})
+# Non-empty decks so the deck-out SBA does not end the game first
+solo_p0.deck = [volzeos] * 5
+solo_p1.deck = [volzeos] * 5
 solo_state = GameState(
     players=(solo_p0, solo_p1),
     turn_info=TurnInfo(turn_number=2, active_player=0, phase=Phase.MAIN),
@@ -194,3 +196,6 @@ check(
 )
 
 print(f"\n{'All passed' if failed == 0 else f'{failed} FAILED'}")
+
+if failed:
+    sys.exit(1)

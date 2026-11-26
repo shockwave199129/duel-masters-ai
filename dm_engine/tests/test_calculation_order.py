@@ -7,9 +7,14 @@ sys.path.insert(0, "dm_engine")
 from core.number_calc import CalculationOp, calculate_dm
 
 
+FAILURES: list[str] = []
+
+
 def check(name: str, condition: bool, detail: str = "") -> bool:
     status = "✅ PASS" if condition else "❌ FAIL"
     print(f"{status}: {name}" + (f" - {detail}" if detail else ""))
+    if not condition:
+        FAILURES.append(name)
     return condition
 
 
@@ -42,3 +47,7 @@ result3 = calculate_dm(10, [
 check("Mult after add/sub: (10-2)*3 = 24", result3 == 24, f"got {result3}")
 
 print("\n" + "=" * 70)
+
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+    sys.exit(1)

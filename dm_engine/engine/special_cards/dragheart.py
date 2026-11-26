@@ -1,7 +1,7 @@
 """engine/special_cards/dragheart.py — Dragheart card mechanics."""
 from __future__ import annotations
 from core.state import GameState
-from core.zones import Creature, EvolutionStackEntry, HandCard
+from core.zones import Creature
 from core.cards import CardDefinition
 from core.enums import CardSubtype
 from engine.zone_mover import creature_to_hyperspatial_card
@@ -23,7 +23,6 @@ def dragsolve_dragheart(
     Rule 807.5: Dragheart Creatures DO suffer from summoning sickness if they entered
     the BZ this turn as a Weapon (entered_turn == current turn).
     """
-    from core.cards import CardDefinition
     creature = state.players[player].find_creature(creature_uid)
     if creature is None:
         raise ValueError(f"Creature {creature_uid} not found for dragsolve")
@@ -78,7 +77,6 @@ def apply_dragon_evasion(
     Apply the Dragon Evasion replacement effect: flip to lower-cost face, stay in BZ.
     (Rule 807.1b)
     """
-    from core.cards import CardDefinition
     creature = state.players[player].find_creature(creature_uid)
     if creature is None:
         raise ValueError(f"Creature {creature_uid} not found for dragon_evasion")

@@ -1,8 +1,7 @@
 """engine/sba/actions/standalone_weapon.py — State-based action: Rule 305.3 — standalone weapon."""
 from __future__ import annotations
-from core.enums import CardType, CardSubtype, GlobalEffectType
+from core.enums import CardType
 from core.state import GameState
-from core.zones import Creature
 from core.zones import GraveyardCard
 
 

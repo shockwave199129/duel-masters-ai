@@ -20,7 +20,7 @@ import sys
 sys.path.insert(0, "dm_engine")
 
 from core.enums import (
-    ActionType, CardSubtype, CardType, Civilization, INFINITY, Keyword, Phase
+    CardSubtype, CardType, Civilization, INFINITY, Phase
 )
 from core.cards import CardDefinition
 from core.state import AttackContext, GameState, PlayerState, TurnInfo
@@ -29,9 +29,14 @@ from engine.battle_resolver import resolve_battle
 from engine.sba_checker import check_state_based_actions
 
 
+FAILURES: list[str] = []
+
+
 def check(name: str, condition: bool, detail: str = "") -> bool:
     status = "PASS" if condition else "FAIL"
     print(f"{status}: {name}" + (f" - {detail}" if detail else ""))
+    if not condition:
+        FAILURES.append(name)
     return condition
 
 
@@ -57,6 +62,9 @@ def make_card(card_id: int, name: str, power: int, keywords=()):
 def make_state() -> GameState:
     p0 = PlayerState(player_index=0, player_name="P0")
     p1 = PlayerState(player_index=1, player_name="P1")
+    # Non-empty decks so the deck-out SBA does not end the game first
+    for player in (p0, p1):
+        player.deck = [make_card(900 + i, f"Filler{i}", 1000) for i in range(5)]
     return GameState(
         players=[p0, p1],
         turn_info=TurnInfo(active_player=0, turn_number=2, phase=Phase.BATTLE),
@@ -223,3 +231,7 @@ total_with_raw = c1.compute_power() + 11000
 check("Hell Scrapper: reduced creature contributes 0 to total",
       total_with_effective == 11000,
       f"effective total = {total_with_effective}, raw total = {total_with_raw}")
+
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+    sys.exit(1)

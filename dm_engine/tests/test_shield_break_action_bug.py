@@ -7,14 +7,15 @@ Tests that resolve_shield_break_choice:
   3. Correctly breaks 2 shields when action has break_mode "double"
   4. Correctly breaks 1 shield (default) when action has no break_mode
 """
+import sys
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from core.cards import CardDefinition
-from core.enums import ActionType, CardSubtype, CardType, Civilization, Keyword, Phase
+from core.enums import CardSubtype, CardType, Civilization, Phase
 from core.player_state import PlayerState
 from core.state import AttackContext, GameState, TurnInfo
-from core.zones import Creature, HandCard, ShieldCard, ManaCard
+from core.zones import Creature, ShieldCard
 from engine.shield_resolver import resolve_shield_break_choice
 
 PASS = "✅"
@@ -83,6 +84,16 @@ def make_state(num_shields=5):
     return s
 
 
+def pick_shields(state, action, count):
+    for index in range(count):
+        before = len(state.players[1].shield_zone)
+        state = resolve_shield_break_choice(state, index, action)
+        if index < count - 1:
+            check(f"Nothing breaks after {index + 1} of {count} picks",
+                  len(state.players[1].shield_zone) == before)
+    return state
+
+
 def main():
     print("\n" + "=" * 60)
     print("  SHIELD BREAK ACTION BUG — REGRESSION TESTS")
@@ -106,7 +117,8 @@ def main():
     print("\n[Test 2] Triple break: action with break_mode='triple'")
     s2 = make_state(num_shields=5)
     try:
-        after = resolve_shield_break_choice(s2, 0, MockAction(break_mode="triple"))
+        # Rule 509.3: the attacker picks each shield; they break together
+        after = pick_shields(s2, MockAction(break_mode="triple"), 3)
         remaining = len(after.players[1].shield_zone)
         check("Triple break removes 3 shields", remaining == 2, f"expected 2 remaining, got {remaining}")
     except Exception as e:
@@ -116,7 +128,7 @@ def main():
     print("\n[Test 3] Double break: action with break_mode='double'")
     s3 = make_state(num_shields=5)
     try:
-        after = resolve_shield_break_choice(s3, 0, MockAction(break_mode="double"))
+        after = pick_shields(s3, MockAction(break_mode="double"), 2)
         remaining = len(after.players[1].shield_zone)
         check("Double break removes 2 shields", remaining == 3, f"expected 3 remaining, got {remaining}")
     except Exception as e:
@@ -147,3 +159,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+if not all(ok for _, ok, _ in results):
+    sys.exit(1)

@@ -134,6 +134,9 @@ pm_state = GameState(
 pm_uid = pm_state.players[1].battle_zone[0].uid
 pm_state.effect_stack.add_trigger(PendingTrigger(effect(13, EffectAction.POWER_MODIFY, {"amount": 2000}, {"target_uid": pm_uid}), "src4", 13, 0, {"target_uid": pm_uid}))
 pm_state.effect_stack.add_trigger(PendingTrigger(effect(14, EffectAction.POWER_FIX, {"fixed_value": 5000}, {"target_uid": pm_uid}), "src5", 14, 0, {"target_uid": pm_uid}))
+# Two of one player's effects wait together, so say which goes first (rule 605.1)
+for order, waiting_trigger in enumerate(pm_state.effect_stack.pending_triggers):
+    waiting_trigger.priority = order
 after = resolve_pending_triggers(pm_state)
 creature = after.players[1].battle_zone[0]
 check("Power modify affects compute_power", creature.compute_power(after) == 5000)

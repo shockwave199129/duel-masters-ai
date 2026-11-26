@@ -1,7 +1,6 @@
 """engine/cards/effect_actions/misc.py — Miscellaneous and control effects."""
 from __future__ import annotations
 
-import random
 
 from core.state import GameState, PendingTrigger
 from core.enums import CardType

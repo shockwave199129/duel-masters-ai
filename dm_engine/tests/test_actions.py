@@ -24,10 +24,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from core.enums import (
     ActionType, Civilization, Phase, Keyword, Zone,
     CardType, CardSubtype, GlobalEffectType, ManaUsage,
-    EffectType, TriggerEvent, EffectAction, GameResult,
+    TriggerEvent, EffectAction,
 )
 from core.actions import (
-    Action,
     charge_mana, pass_charge, pass_main, pass_attack, pass_block,
     summon_creature, cast_spell, generate_cross_gear, cross_gear,
     fortify_castle, deploy_field, execute_tamaseed,

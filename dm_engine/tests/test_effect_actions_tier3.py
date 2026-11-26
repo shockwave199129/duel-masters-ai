@@ -17,12 +17,11 @@ from core.enums import (
 from core.player_state import PlayerState
 from core.state import AttackContext, GameState, PendingTrigger, TurnInfo
 from core.zones import Creature
-from engine.action_generator import get_legal_actions
 from engine.action_executor import _is_legal_action
 from engine.cards.effect_actions.combat import (
     _do_must_attack, _do_must_block, _do_cannot_block,
 )
-from engine.cards.effect_actions.misc import _do_protection, _do_gain_control
+from engine.cards.effect_actions.misc import _do_gain_control
 from engine.cards.effect_actions.zone_ops import _do_destroy
 from engine.effect_executor import _collect_target_options
 from engine.phase_controller import _end_turn

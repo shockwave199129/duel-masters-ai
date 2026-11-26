@@ -32,16 +32,22 @@ def resolve_battle(state: GameState) -> GameState:
     if defender_result is None:
         s.turn_info.phase = Phase.END_OF_ATTACK
         return s
-    _, defender = defender_result
+    defender_player, defender = defender_result
 
-    # Fire ON_BATTLE trigger (both participants)
+    # "When this battles" abilities resolve before power is compared (701.13a).
+    # If any trigger, stop here; the battle goes on once they have resolved.
     from engine.trigger_registry import fire_trigger
-    fire_trigger(s, TriggerEvent.ON_BATTLE, {
-        "attacker_uid": attacker.uid,
-        "defender_uid": defender.uid,
-        "attacker_player": ctx.attacker_player,
-        "defender_player": ctx.blocker_player if ctx.blocker_uid else ctx.attacker_player,
-    }, attacker.uid)
+    if not ctx.battle_triggered:
+        ctx.battle_triggered = True
+        waiting = len(s.effect_stack.pending_triggers)
+        fire_trigger(s, TriggerEvent.ON_BATTLE, {
+            "attacker_uid": attacker.uid,
+            "defender_uid": defender.uid,
+            "attacker_player": ctx.attacker_player,
+            "defender_player": defender_player,
+        }, attacker.uid)
+        if len(s.effect_stack.pending_triggers) > waiting:
+            return s
 
     attacker_always_wins = _wins_battles(attacker)
     defender_always_wins = _wins_battles(defender)
@@ -101,7 +107,7 @@ def resolve_battle(state: GameState) -> GameState:
         fire_trigger(s, TriggerEvent.ON_WIN_BATTLE, {
             "source_uid": defender.uid,
             "source_card_id": defender.id,
-            "controller": ctx.blocker_player if ctx.blocker_uid else ctx.attacker_player,
+            "controller": defender_player,
             "opponent_uid": attacker.uid,
         }, defender.uid)
 

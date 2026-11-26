@@ -15,19 +15,18 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.cards import CardDefinition, CardEffect
+from core.cards import CardDefinition
 from core.enums import (
-    CardSubtype, CardType, Civilization, EffectAction,
-    EffectType, Phase, TriggerEvent,
+    CardSubtype, CardType, Civilization, Phase,
 )
 from core.player_state import PlayerState
 from core.state import GameState, TurnInfo
-from core.zones import Creature, HandCard, ShieldCard
+from core.zones import Creature
 from engine.replacement import (
     EventType, ReplacementEffect, ReplacementEffectRegistry,
 )
 from engine.sba_checker import _destroy_creature, check_state_based_actions
-from engine.zone_mover import draw_card, move_battle_to_graveyard
+from engine.zone_mover import draw_card
 
 PASS = "✅"
 FAIL = "❌"
@@ -212,7 +211,7 @@ state_repl.replacement_effects.register(crep)
 
 # Use a copied state to avoid mutating the original
 state_repl_copy = state_repl.copy()
-_destroy_creature(state_repl_copy, 0, state_repl_copy.players[0].battle_zone[0], "sba_zero_power")
+_destroy_creature(state_repl_copy, 0, state_repl_copy.players[0].battle_zone[0], "destroyed")
 
 # Verify replacement was applied
 repl_creature_after = state_repl_copy.players[0].battle_zone[0]

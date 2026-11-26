@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import logging
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from bot.action_encoder import ACTION_VECTOR_SIZE_V2, ACTION_VECTOR_SIZE_V3
 from bot.neural_model import (
@@ -22,6 +24,8 @@ from bot.neural_model import (
     save_model,
 )
 from bot.state_encoder import OBSERVATION_VECTOR_SIZE_V2, OBSERVATION_VECTOR_SIZE_V3
+from training.compact_data import DecisionBatches, PairBatches, load_compact
+from training.device import autocast, get_device, optimizer_step, warmup
 
 logger = logging.getLogger(__name__)
 
@@ -173,12 +177,71 @@ def _load_jsonl_dataset(
     return TensorDataset(feature_tensor, target_tensor)
 
 
+class GroupedDecisionDataset(Dataset):
+    """One item per decision; each keeps its own number of legal actions."""
+
+    def __init__(self, items: list[tuple[torch.Tensor, ...]]):
+        self.items = items
+        self.state_size = int(items[0][0].shape[0])
+        self.action_size = int(items[0][1].shape[1])
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
+        return self.items[index]
+
+
+def collate_decisions(batch: list[tuple[torch.Tensor, ...]]) -> tuple[torch.Tensor, ...]:
+    """
+    Pad legal actions to the largest count in this batch.
+
+    Returns (states, actions, policy, blended, heuristic, value, action_mask).
+    action_mask is True for real actions and False for padding.
+    """
+    states, actions, policies, blended, heuristic, value = zip(*batch)
+    counts = torch.tensor([action.shape[0] for action in actions])
+    padded_actions = pad_sequence(list(actions), batch_first=True)
+    action_mask = torch.arange(padded_actions.shape[1]).unsqueeze(0) < counts.unsqueeze(1)
+    return (
+        torch.stack(states),
+        padded_actions,
+        pad_sequence(list(policies), batch_first=True),
+        torch.stack(blended),
+        torch.stack(heuristic),
+        torch.stack(value),
+        action_mask,
+    )
+
+
+def score_legal_actions(
+    score_fn,
+    states: torch.Tensor,
+    actions: torch.Tensor,
+    action_mask: torch.Tensor,
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Score only the real actions and return a [decisions, max_actions] tensor.
+
+    Padding slots are never run through the model, so memory grows with the
+    number of legal moves and not with batch size times the longest move list.
+    Padding scores are -1e9. Results are float32 for the loss arithmetic.
+    """
+    decision_index = action_mask.nonzero(as_tuple=True)[0]
+    merged = torch.cat([states[decision_index], actions[action_mask]], dim=-1)
+    with autocast(device):
+        flat = score_fn(merged)
+    scores = torch.full(action_mask.shape, -1e9, dtype=torch.float32, device=action_mask.device)
+    return scores.masked_scatter(action_mask, flat.float().reshape(-1))
+
+
 def _load_grouped_dataset(
     path: str | Path,
     *,
     balance_players: bool = True,
     seed: int = 1,
-) -> TensorDataset:
+) -> GroupedDecisionDataset:
     rows = _load_decision_rows(path, balance_players=balance_players, seed=seed)
 
     state_rows: list[list[float]] = []
@@ -214,13 +277,12 @@ def _load_grouped_dataset(
     if not state_rows:
         raise ValueError(f"No training rows found in {path}")
 
-    return TensorDataset(
-        torch.tensor(state_rows, dtype=torch.float32),
-        torch.tensor(action_rows, dtype=torch.float32),
-        torch.tensor(policy_rows, dtype=torch.float32),
-        torch.tensor(blended_rows, dtype=torch.float32),
-        torch.tensor(heuristic_rows, dtype=torch.float32),
-        torch.tensor(value_rows, dtype=torch.float32),
+    def as_tensor(value) -> torch.Tensor:
+        return torch.tensor(value, dtype=torch.float32)
+
+    columns = (state_rows, action_rows, policy_rows, blended_rows, heuristic_rows, value_rows)
+    return GroupedDecisionDataset(
+        [tuple(as_tensor(value) for value in item) for item in zip(*columns)]
     )
 
 
@@ -329,6 +391,9 @@ def train_action_score_model(
     loss_mode: str = "mse",
     ranking_margin: float = 0.10,
     balance_players: bool = True,
+    device: str = "auto",
+    data_on_gpu: bool = False,
+    warmup_steps: int = 0,
 ) -> TrainSummary:
     """Train and save an ActionScoreNet checkpoint."""
     if epochs < 1:
@@ -340,8 +405,17 @@ def train_action_score_model(
         raise ValueError("loss_mode must be 'mse', 'pairwise', 'blended', or 'distillation'")
 
     torch.manual_seed(seed)
+    train_device = get_device(device)
+    pin = train_device.type == "cuda"
     loader_kwargs = {"balance_players": balance_players, "seed": seed}
-    if loss_mode == "pairwise":
+    if data_on_gpu:
+        if loss_mode not in {"pairwise", "distillation"}:
+            raise ValueError("data_on_gpu supports the pairwise and distillation losses")
+        dataset = load_compact(
+            input_path, device=train_device, normalize=_normalize_state_action_row, **loader_kwargs)
+        logger.info("Training data on %s: %s decisions, %.2f GB",
+                    train_device.type, len(dataset), dataset.bytes_used() / 1e9)
+    elif loss_mode == "pairwise":
         dataset = _load_pairwise_dataset(input_path, **loader_kwargs)
     elif loss_mode == "distillation":
         dataset = _load_grouped_dataset(input_path, **loader_kwargs)
@@ -349,14 +423,27 @@ def train_action_score_model(
         dataset = _load_blended_dataset(input_path, **loader_kwargs)
     else:
         dataset = _load_jsonl_dataset(input_path, **loader_kwargs)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    input_size = int(dataset.tensors[0].shape[1])
+    if data_on_gpu:
+        kind = PairBatches if loss_mode == "pairwise" else DecisionBatches
+        loader = kind(dataset, batch_size, seed=seed)
+        input_size = dataset.state_size + dataset.action_size
+    elif loss_mode == "distillation":
+        loader = DataLoader(
+            dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_decisions, pin_memory=pin
+        )
+        input_size = dataset.state_size + dataset.action_size
+    else:
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=pin)
+        input_size = int(dataset.tensors[0].shape[1])
     model = ActionScoreNet(
         input_size=input_size,
         hidden_size=hidden_size,
         num_blocks=num_blocks,
         dropout=dropout,
     )
+    model.to(train_device)
+    # A trainable temperature can satisfy ranking margins by rescaling scores
+    model.temperature.requires_grad_(False)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     bce_loss_fn = nn.BCEWithLogitsLoss()
     mse_loss_fn = nn.MSELoss()
@@ -364,46 +451,51 @@ def train_action_score_model(
     final_loss = 0.0
 
     model.train()
+    step = 0
     for epoch in range(epochs):
+        started = time.perf_counter()
         running_loss = 0.0
         batches = 0
         for batch in loader:
-            if loss_mode == "pairwise":
-                batch_chosen, batch_other, batch_labels = batch
-                chosen_scores = model(batch_chosen).squeeze(-1)
-                other_scores = model(batch_other).squeeze(-1)
-                loss = ranking_loss_fn(chosen_scores, other_scores, batch_labels)
-            elif loss_mode == "distillation":
-                batch_state, batch_actions, batch_policy, *_rest = batch
-                batch_size, action_count, _ = batch_actions.shape
-                state_expanded = batch_state.unsqueeze(1).expand(-1, action_count, -1)
-                merged = torch.cat([state_expanded, batch_actions], dim=-1).reshape(batch_size * action_count, -1)
-                scores = model(merged).reshape(batch_size, action_count)
-                log_probs = torch.log_softmax(scores, dim=-1)
-                loss = -(batch_policy.clamp(min=1e-8) * log_probs).sum(dim=-1).mean()
-            elif loss_mode == "blended":
-                batch_features, batch_targets = batch
-                predictions = model(batch_features).squeeze(-1)
-                loss = mse_loss_fn(torch.sigmoid(predictions), batch_targets)
-            else:
-                batch_features, batch_targets = batch
-                predictions = model(batch_features).squeeze(-1)
-                loss = bce_loss_fn(predictions, batch_targets)
+            batch = [tensor.to(train_device, non_blocking=True) for tensor in batch]
+            with autocast(train_device):
+                if loss_mode == "pairwise":
+                    batch_chosen, batch_other, batch_labels = batch
+                    chosen_scores = model(batch_chosen).float().squeeze(-1)
+                    other_scores = model(batch_other).float().squeeze(-1)
+                    loss = ranking_loss_fn(chosen_scores, other_scores, batch_labels)
+                elif loss_mode == "distillation":
+                    batch_state, batch_actions, batch_policy, *_rest, action_mask = batch
+                    scores = score_legal_actions(model, batch_state, batch_actions, action_mask, train_device)
+                    log_probs = torch.log_softmax(scores, dim=-1)
+                    loss = -(batch_policy * log_probs.masked_fill(~action_mask, 0.0)).sum(dim=-1).mean()
+                elif loss_mode == "blended":
+                    batch_features, batch_targets = batch
+                    predictions = model(batch_features).float().squeeze(-1)
+                    # Targets range from -1 to 1, so predictions must too
+                    loss = mse_loss_fn(torch.tanh(predictions), batch_targets)
+                else:
+                    batch_features, batch_targets = batch
+                    predictions = model(batch_features).float().squeeze(-1)
+                    loss = bce_loss_fn(predictions, batch_targets)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            warmup(optimizer, lr, step, warmup_steps)
+            optimizer_step(model, optimizer, loss)
+            step += 1
 
             running_loss += float(loss.item())
             batches += 1
         final_loss = running_loss / max(batches, 1)
-        logger.info("epoch=%s/%s loss=%.6f", epoch + 1, epochs, final_loss)
+        logger.info(
+            "epoch=%s/%s loss=%.6f device=%s batch_size=%s seconds=%.1f",
+            epoch + 1, epochs, final_loss, train_device.type, batch_size, time.perf_counter() - started,
+        )
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     save_model(model, output)
     return TrainSummary(
-        rows=len(dataset),
+        rows=loader.pairs if data_on_gpu and loss_mode == "pairwise" else len(dataset),
         epochs=epochs,
         final_loss=final_loss,
         output_path=output,

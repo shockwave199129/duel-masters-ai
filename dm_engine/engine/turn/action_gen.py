@@ -40,10 +40,23 @@ During random play, a valid combination is chosen at random.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 import itertools
 import re
 from typing import Optional
 
+from core.card_scripts import (
+    ABYSS_RUSH_GRANTS, BIG_SUMMON_DISCOUNT, GRAVEYARD_SELF_DISCOUNT, GRAVEYARD_SUMMON_DISCOUNT,
+    ATTACK_CHANCE, COUNTERATTACK, FUSHIGIVERSE, HYPER_MODE, NEO_EVOLUTION, RECYCLE, SASAGALE,
+    TWINPACT_SPELLS, SUMMON_FROM_GRAVEYARD, SUMMON_FROM_MANA, SUMMON_FROM_MANA_GRANTS,
+)
+from core.continuous_rules import (
+    count_of, granted, has_abilities, has_graveyard_rush, is_creature_now, may_attack_player,
+    has_race, shield_has_trigger, spells_locked,
+)
+from engine.entry_rules import may_enter
+from engine.leave_rules import leave_options
 from core.enums import (
     Phase, ActionType, Civilization, Keyword,
     CardType, CardSubtype, ManaUsage, EffectAction, EffectType,
@@ -66,8 +79,7 @@ from core.actions import (
     use_g_zero, use_g_strike, use_attack_chance, use_over_drive, use_sabaki_z,
     hyperize,
     select_yes_no, select_target, select_targets,
-    select_card, select_mana, select_evolution_base,
-    pass_action,
+    select_card, select_mana, pass_action,
 )
 
 # We lazily import CardDatabase to avoid circular imports
@@ -185,6 +197,9 @@ def _generate_main_actions(state: GameState, db=None) -> list[Action]:
         )
         actions.extend(card_actions)
 
+    # ── Other ways to summon: Neo Evolution, graveyard, mana zone ─────────
+    actions.extend(_special_summon_actions(player, state))
+
     # ── GR creatures from Ultra GR zone (rule 408, 701.30) ─────────────────
     # GR creatures can be summoned from the Ultra GR zone during the main phase.
     # They require paying their mana cost and enter with summoning sickness.
@@ -234,6 +249,15 @@ def _generate_main_actions(state: GameState, db=None) -> list[Action]:
     # ── Hyperize (rule 816) ────────────────────────────────────────────────
     # A creature in the battle zone with Hyperize ability whose Hyper Mode
     # has not yet been released this turn.
+    # Hyperify: tap one of your other creatures to release Hyper Mode
+    for creature in p_state.battle_zone:
+        if (creature.definition.slug in HYPER_MODE and not creature.hyper_mode_released
+                and has_abilities(creature) and not creature.is_ignored):
+            for other in p_state.battle_zone:
+                if other.uid != creature.uid and not other.is_tapped and is_creature_now(state, other):
+                    actions.append(replace(
+                        hyperize(player, creature.uid, creature.id), target_uid=other.uid))
+
     for creature in p_state.battle_zone:
         if (creature.has_keyword(Keyword.HYPERIZE)
                 and not creature.hyper_mode_released
@@ -265,6 +289,152 @@ def _generate_main_actions(state: GameState, db=None) -> list[Action]:
 
     # ── Pass (end main step) ───────────────────────────────────────────────
     actions.append(pass_main(player))
+    return actions
+
+
+def _summon_actions(
+    player: int, state: GameState, card_uid: str, defn, *,
+    zone: str = "", evolve: bool = False, abyss_rush: bool = False,
+) -> list[Action]:
+    """
+    Ways to pay for summoning one creature, as it is or onto an evolution base.
+
+    ``zone`` is "" for the hand, else "graveyard" or "mana_zone".
+    """
+    if not defn.is_creature() or not state.global_effects.can_summon_creature(
+        player, defn.civilizations,
+        card_type=defn.card_type.value, card_subtype=defn.card_subtype.value,
+    ):
+        return []
+    if not may_enter(state, player, from_hand=not zone, played=True, definition=defn):
+        return []
+    neo = NEO_EVOLUTION.get(defn.slug)
+    if evolve:
+        if neo is None:
+            return []
+        bases = [
+            c.uid for c in state.players[player].battle_zone
+            if c.definition.civilizations & neo["civilizations"] and is_creature_now(state, c)
+        ]
+    else:
+        bases = [None]
+    cost = _compute_effective_cost(
+        defn, state, player, from_graveyard=zone == "graveyard", evolving=evolve)
+    actions = []
+    # A card in the mana zone may be tapped to pay for itself: the cost is paid
+    # first, and then it moves to the battle zone
+    for combo in _get_mana_combinations(state.players[player].mana_zone, cost, defn.civilizations):
+        for base in bases:
+            action = summon_creature(player, card_uid, defn.id, combo, evolution_base_uid=base)
+            if zone:
+                action = replace(action, target_zone=zone)
+            if abyss_rush:
+                action = replace(action, extra=(*(action.extra or ()), ("abyss_rush", True)))
+            actions.append(action)
+    return actions
+
+
+def _special_summon_actions(player: int, state: GameState) -> list[Action]:
+    p_state = state.players[player]
+    actions: list[Action] = []
+
+    # From hand, only the evolution form is extra
+    for held in p_state.hand:
+        actions.extend(_summon_actions(player, state, held.uid, held.definition, evolve=True))
+
+    rush_races = granted(state, player, ABYSS_RUSH_GRANTS)
+    for dead in p_state.graveyard:
+        defn = dead.definition
+        ways = []
+        if defn.slug in SUMMON_FROM_GRAVEYARD:
+            ways.append(False)
+        if any(race in own for race in rush_races for own in defn.races):
+            ways.append(True)
+        for rush in ways:
+            for evolve in (False, True):
+                actions.extend(_summon_actions(
+                    player, state, dead.uid, defn, zone="graveyard", evolve=evolve, abyss_rush=rush))
+
+    mana_races = granted(state, player, SUMMON_FROM_MANA_GRANTS)
+    for stored in p_state.mana_zone:
+        defn = stored.definition
+        if defn.slug in SUMMON_FROM_MANA or any(r in own for r in mana_races for own in defn.races):
+            for evolve in (False, True):
+                actions.extend(_summon_actions(
+                    player, state, stored.uid, defn, zone="mana_zone", evolve=evolve))
+    actions.extend(_sasagale_actions(player, state))
+
+    for held in p_state.hand:  # the spell side of a Twinpact card
+        twin = TWINPACT_SPELLS.get(held.definition.slug)
+        if twin and not spells_locked(state, player):
+            for combo in _get_mana_combinations(p_state.mana_zone, twin[0], twin[1]):
+                actions.append(replace(
+                    cast_spell(player, held.uid, held.definition.id, combo),
+                    extra=(("twinpact_spell", True),)))
+
+    for dead in p_state.graveyard:
+        defn = dead.definition
+        if defn.slug in RECYCLE and not spells_locked(state, player):
+            for combo in _get_mana_combinations(
+                    p_state.mana_zone, RECYCLE[defn.slug], defn.civilizations):
+                actions.append(replace(
+                    cast_spell(player, dead.uid, defn.id, combo), target_zone="graveyard"))
+        if defn.slug in FUSHIGIVERSE and may_enter(
+                state, player, from_hand=False, played=True, definition=defn):
+            actions.extend(_fushigiverse_actions(player, state, dead.uid, defn))
+    return actions
+
+
+def _sasagale_actions(player: int, state: GameState) -> list[Action]:
+    """Cheaper summons paid for partly by destroying Sasagale creatures."""
+    p_state = state.players[player]
+    actions: list[Action] = []
+    for held in p_state.hand:
+        defn = held.definition
+        if (not defn.is_creature() or defn.is_evolution()
+                or not may_enter(state, player, from_hand=True, played=True, definition=defn)
+                or not state.global_effects.can_summon_creature(
+                    player, defn.civilizations, card_type=defn.card_type.value,
+                    card_subtype=defn.card_subtype.value)):
+            continue
+        # Only creatures that really can be destroyed may pay (rule 601.1a)
+        helpers = [
+            (creature.uid, SASAGALE[creature.definition.slug][0])
+            for creature in p_state.battle_zone
+            if creature.definition.slug in SASAGALE and has_abilities(creature)
+            and has_race(defn, SASAGALE[creature.definition.slug][1])
+            and creature.can_be_destroyed()
+            and not leave_options(state, player, creature, reason="effect", to_zone="graveyard")
+        ]
+        cost = _compute_effective_cost(defn, state, player)
+        used, reduction = [], 0
+        for uid, amount in helpers:
+            if cost - reduction <= 1:
+                break
+            used.append(uid)
+            reduction += amount
+            for combo in _get_mana_combinations(
+                    p_state.mana_zone, max(1, cost - reduction), defn.civilizations):
+                actions.append(replace(
+                    summon_creature(player, held.uid, defn.id, combo),
+                    extra=(("sasagale", tuple(used)),)))
+    return actions
+
+
+def _fushigiverse_actions(player: int, state: GameState, card_uid: str, defn) -> list[Action]:
+    base, minimum, civilizations = FUSHIGIVERSE[defn.slug]
+    p_state = state.players[player]
+    actions = []
+    for creature in p_state.battle_zone:
+        # It must really be able to reach the mana zone (rule 601.1a)
+        if not is_creature_now(state, creature) or leave_options(
+                state, player, creature, reason="fushigiverse", to_zone="mana_zone"):
+            continue
+        cost = max(minimum, base - creature.definition.cost)
+        for combo in _get_mana_combinations(p_state.mana_zone, cost, civilizations):
+            action = summon_creature(player, card_uid, defn.id, combo)
+            actions.append(replace(action, target_zone="graveyard",
+                                   extra=(("fushigiverse", creature.uid),)))
     return actions
 
 
@@ -372,7 +542,7 @@ def _actions_for_hand_card(
             return actions
 
         # ── Twinpact dual-face summon (Rule 810.3) ────────────────────────
-        if is_twinpact(defn):
+        if is_twinpact(defn) and defn.slug not in TWINPACT_SPELLS:
             for face in (0, 1):
                 chars = get_twinpact_characteristics(defn, face)
                 face_cost = chars["cost"]
@@ -438,6 +608,12 @@ def _actions_for_hand_card(
         )
         for combo in combos:
             actions.append(generate_cross_gear(player, card_uid, defn.id, combo))
+
+    # ── G Castle (rule 822): becomes a new face-up shield ──────────────────
+    elif card_type == CardType.CASTLE and card_subtype == CardSubtype.G_CASTLE:
+        effective_cost = _compute_effective_cost(defn, state, player)
+        for combo in _get_mana_combinations(p_state.mana_zone, effective_cost, defn.civilizations):
+            actions.append(fortify_castle(player, card_uid, defn.id, combo, target_uid=""))
 
     # ── Castle (rule 304) ──────────────────────────────────────────────────
     elif card_type == CardType.CASTLE:
@@ -677,7 +853,10 @@ def _generate_attack_declarations(state: GameState) -> list[Action]:
     has_must_attack = len(must_attack_creatures) > 0
 
     for creature in p_state.battle_zone:
-        if not creature.can_attack():
+        if not is_creature_now(state, creature):
+            continue
+        # Some cards remove summoning sickness from creatures put from the graveyard
+        if not creature.can_attack(ignore_sickness=has_graveyard_rush(state, creature)):
             continue
         # Rule 115.3b: creatures with 0 or negative effective power cannot attack
         if creature.effective_power(state) < 1:
@@ -685,7 +864,7 @@ def _generate_attack_declarations(state: GameState) -> list[Action]:
 
         # ── Attack player (rule 506.1e) ────────────────────────────────────
         # Cannot attack player if creature has "cannot_attack_players"
-        if creature.can_attack_players():
+        if creature.can_attack_players() and may_attack_player(state, creature, opponent):
             actions.append(attack_player(player, creature.uid, creature.id))
 
         # ── Attack opponent's creatures (rule 506.1e) ─────────────────────
@@ -695,6 +874,8 @@ def _generate_attack_declarations(state: GameState) -> list[Action]:
 
         for target in o_state.battle_zone:
             if target.is_ignored:          # rule 116.2: ignored can't be targeted
+                continue
+            if not is_creature_now(state, target):
                 continue
             if target.is_tapped or is_mach:
                 actions.append(attack_creature(
@@ -787,6 +968,20 @@ def _generate_post_declare_actions(state: GameState) -> list[Action]:
                     hand_card.uid, hand_card.id,
                 ))
 
+    if ctx is not None:
+        attacking = state.find_creature_anywhere(ctx.attacker_uid)
+        for held in state.players[player].hand:
+            needed = ATTACK_CHANCE.get(held.definition.slug)
+            if (needed and attacking and needed[0] in attacking[1].definition.civilizations
+                    and attacking[1].compute_power(state) >= needed[1]):
+                actions.append(use_attack_chance(player, held.uid, held.definition.id))
+        if ctx.is_attacking_player and not ctx.counterattack_used:
+            for held in opp_state.hand:
+                if held.definition.slug in COUNTERATTACK:
+                    actions.append(replace(
+                        use_attack_chance(opponent, held.uid, held.definition.id),
+                        extra=(("counterattack", True),)))
+
     actions.append(pass_action(player, "post_declare"))
     return actions
 
@@ -863,12 +1058,16 @@ def _generate_block_actions(state: GameState) -> list[Action]:
     for creature in d_state.battle_zone:
         if creature.is_ignored:          # rule 116.2
             continue
+        if ctx.block_finished or creature.uid == ctx.blocker_uid:
+            continue
         if creature.is_tapped:           # rule 507.1a example
             continue
         if creature.uid == ctx.target_uid:  # rule 507.1a: attacked creature can't self-block
             continue
         # CANNOT_BLOCK: this creature cannot be chosen as a blocker
-        if creature.temp_flags.get("cannot_block", False):
+        if not is_creature_now(state, creature):
+            continue
+        if creature.temp_flags.get("cannot_block", False) or "locked_until_turn_of" in creature.temp_flags:
             continue
 
         # ── Blocker (rule 507.1a) ─────────────────────────────────────────
@@ -935,6 +1134,12 @@ def _generate_direct_attack_actions(state: GameState) -> list[Action]:
         # Single-break not offered. Generate paired choices for each shield.
         from core.actions import Action as _Action
         for i in range(state.effective_shield_count(defender)):
+            if i in ctx.chosen_shields:
+                continue
+            if ctx.break_mode:  # already chosen with the first shield
+                actions.append(_Action(player=player, action_type=ActionType.SELECT_ATTACK_ORDER,
+                                       shield_index=i))
+                continue
             actions.append(_Action(
                 player=player,
                 action_type=ActionType.SELECT_ATTACK_ORDER,
@@ -950,6 +1155,8 @@ def _generate_direct_attack_actions(state: GameState) -> list[Action]:
     else:
         # Normal path — one SELECT_ATTACK_ORDER per shield position
         for i in range(state.effective_shield_count(defender)):
+            if i in ctx.chosen_shields:
+                continue
             from core.actions import select_shield_to_break
             actions.append(select_shield_to_break(player, shield_index=i))
 
@@ -973,7 +1180,7 @@ def _generate_shield_break_window_actions(state: GameState) -> list[Action]:
         for shield in win.standby_shields:
             defn = shield.definition
             uid = shield.uid
-            if defn.has_shield_trigger() and uid not in win.declared_s_triggers:
+            if shield_has_trigger(state, player, defn) and uid not in win.declared_s_triggers:
                 actions.append(use_shield_trigger(player, uid, defn.id, use=True))
             if defn.has_keyword(Keyword.G_STRIKE) and uid not in win.declared_g_strikes:
                 actions.append(use_g_strike(player, uid, defn.id, use=True))
@@ -1140,14 +1347,17 @@ def _generate_choice_actions(state: GameState) -> list[Action]:
         actions.append(select_yes_no(player, True,  choice.source_uid))
         actions.append(select_yes_no(player, False, choice.source_uid))
 
-    elif choice.choice_type == "select_target":
+    elif choice.choice_type in ("select_target", "order_effects"):
         for target_uid in options:
             zone = choice.effect.active_in_zone[0] if choice.effect and choice.effect.active_in_zone else "battle_zone"
-            actions.append(select_target(
+            option = select_target(
                 player, target_uid,
                 zone,
                 choice.source_uid,
-            ))
+            )
+            if target_uid in choice.option_cards:
+                option = replace(option, card_id=choice.option_cards[target_uid])
+            actions.append(option)
         # "up_to" effects allow choosing fewer targets → include pass
         if choice.min_choices == 0:
             actions.append(pass_action(player, "select_target_done"))
@@ -1411,6 +1621,9 @@ def _compute_effective_cost(
     defn:   CardDefinition,
     state:  GameState,
     player: int,
+    *,
+    from_graveyard: bool = False,
+    evolving: bool = False,
 ) -> int:
     """
     Rule 601.1e: apply cost increase/decrease effects to get the final cost.
@@ -1462,6 +1675,23 @@ def _compute_effective_cost(
 
     # ── Clamp to zero (cost cannot go negative) ────────────────────────
     effective = max(0, base_cost + modification)
+
+    # "Your next creature costs up to N less. It can't cost 0 or less."
+    discount = state.players[player].next_creature_discount
+    if defn.is_creature():
+        for slug, (minimum, reduction) in BIG_SUMMON_DISCOUNT.items():
+            if defn.cost >= minimum:
+                discount += reduction * count_of(state, player, {slug})
+        if from_graveyard:
+            for slug, reduction in GRAVEYARD_SUMMON_DISCOUNT.items():
+                discount += reduction * count_of(state, player, {slug})
+        if evolving:
+            discount += NEO_EVOLUTION.get(defn.slug, {}).get("discount", 0)
+        needed, reduction = GRAVEYARD_SELF_DISCOUNT.get(defn.slug, (0, 0))
+        if reduction and len(state.players[player].graveyard) >= needed:
+            discount += reduction
+    if discount and defn.is_creature():
+        effective = max(min(effective, 1), effective - discount)
     return effective
 
 

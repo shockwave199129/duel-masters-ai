@@ -29,10 +29,9 @@ from bot.state_encoder import (
 from core.actions import Action
 from core.enums import GameResult
 from core.state import GameState
-from core.initializer import initialize_game
+from core.initializer import add_nameable_creatures, initialize_game
 from decks.prebuilt import _apply_extra_zones, prebuilt_deck_from_dict
 from engine.action_executor import execute_action
-from engine.action_generator import get_legal_actions
 from engine.game_runner import validate_invariants
 from bot.factory import make_bot
 from training.rewards import blend_targets, heuristic_state_value
@@ -50,6 +49,25 @@ class SelfPlaySummary:
     unfinished: int
 
 
+@dataclass(frozen=True)
+class TrainingDeckPool:
+    """Active training decks and their cards, loaded once per process."""
+
+    ids: list[int]
+    decks: dict[int, Any]
+
+
+def load_training_deck_pool(db, source: str | None = None) -> TrainingDeckPool:
+    deck_ids = db.list_training_deck_ids(source=source, active_only=True)
+    if not deck_ids:
+        raise ValueError("No active training decks found in the database")
+    card_ids: set[int] = set()
+    for deck_id in deck_ids:
+        card_ids.update(db.get_training_deck_card_ids(deck_id))
+    db.load(sorted(card_ids))
+    return TrainingDeckPool(list(deck_ids), {deck_id: db.load_training_deck(deck_id) for deck_id in deck_ids})
+
+
 def _winner_from_result(result: GameResult) -> int | None:
     if result == GameResult.PLAYER_0_WINS:
         return 0
@@ -64,6 +82,12 @@ def _target_for_player(player: int, winner: int | None, terminal: bool) -> float
     if not terminal:
         return 0.0
     return 1.0 if winner == player else -1.0
+
+
+_SCHEMAS = {
+    2: (OBSERVATION_ENCODER_VERSION, ACTION_ENCODER_VERSION, OBSERVATION_VECTOR_SIZE_V2, ACTION_VECTOR_SIZE_V2),
+    3: (OBSERVATION_ENCODER_VERSION_V3, ACTION_ENCODER_VERSION_V3, OBSERVATION_VECTOR_SIZE_V3, ACTION_VECTOR_SIZE_V3),
+}
 
 
 def _encode_decision_features(
@@ -130,23 +154,28 @@ def _record_decision(
     policy_log_prob: float | None = None,
     behavior_log_prob: float | None = None,
     was_random: bool | None = None,
+    encoding: tuple[int, list[float], list[list[float]]] | None = None,
 ) -> dict[str, Any]:
     player = action.player
-    (
-        state_features,
-        legal_action_features,
-        observation_version,
-        action_version,
-        observation_vector_size,
-        action_vector_size,
-    ) = _encode_decision_features(
-        state,
-        player,
-        legal_actions,
-        db=db,
-        encoder_version=encoder_version,
-        rule_service=rule_service,
-    )
+    if encoding is not None and encoding[0] == encoder_version:
+        _, state_features, legal_action_features = encoding
+        observation_version, action_version, observation_vector_size, action_vector_size = _SCHEMAS[encoder_version]
+    else:
+        (
+            state_features,
+            legal_action_features,
+            observation_version,
+            action_version,
+            observation_vector_size,
+            action_vector_size,
+        ) = _encode_decision_features(
+            state,
+            player,
+            legal_actions,
+            db=db,
+            encoder_version=encoder_version,
+            rule_service=rule_service,
+        )
     policy_target = [0.0] * len(legal_actions)
     if 0 <= chosen_index < len(policy_target):
         policy_target[chosen_index] = 1.0
@@ -235,7 +264,7 @@ def run_recorded_game(
     game_id: str,
     game_index: int = 0,
     seat_flip: bool = False,
-    max_steps: int | None = None,
+    max_steps: int | None = 1000,
     epsilon: float = 0.05,
     first_player: int | None = 0,
     model_path: str | Path | None = None,
@@ -247,6 +276,8 @@ def run_recorded_game(
     policy_encoder_version: int | None = None,
     record_encoder_version: int = 3,
     rule_service=None,
+    device: str | None = None,
+    deck_pool: TrainingDeckPool | None = None,
 ) -> tuple[GameState, int]:
     """Run one neural-vs-neural game and append finalized decision rows."""
     rng = random.Random(seed)
@@ -261,11 +292,28 @@ def run_recorded_game(
         use_database_decks=use_database_decks,
         deck_source=deck_source,
         allow_mirror_matches=allow_mirror_matches,
+        deck_pool=deck_pool,
     )
     seat_specs = bot_specs or ("neural", "neural")
     bots = {
-        0: make_bot(seat_specs[0], seed=seed, rule_service=rule_service, model_path=model_path),
-        1: make_bot(seat_specs[1], seed=seed + 1, rule_service=rule_service, model_path=model_path),
+        0: make_bot(
+            seat_specs[0],
+            seed=seed,
+            rule_service=rule_service,
+            model_path=model_path,
+            device=device,
+            epsilon=epsilon,
+            sample=True,
+        ),
+        1: make_bot(
+            seat_specs[1],
+            seed=seed + 1,
+            rule_service=rule_service,
+            model_path=model_path,
+            device=device,
+            epsilon=epsilon,
+            sample=True,
+        ),
     }
     decision_count = 0
 
@@ -307,6 +355,7 @@ def run_recorded_game(
                 policy_log_prob=policy_log_prob,
                 behavior_log_prob=behavior_log_prob,
                 was_random=was_random,
+                encoding=getattr(bot, "last_encoding", None),
             )
             raw_row["seat_bot_0"] = seat_specs[0]
             raw_row["seat_bot_1"] = seat_specs[1]
@@ -323,6 +372,14 @@ def run_recorded_game(
                     f.write(json.dumps({"engine_error": f"{type(exc).__name__}: {exc}"}) + "\n")
                 break
             step += 1
+
+        if max_steps is not None and step >= max_steps and not state.is_terminal():
+            logger.warning(
+                "%s hit the step limit (max_steps=%s, seed=%s); counted as unfinished",
+                game_id,
+                max_steps,
+                seed,
+            )
 
         with raw_path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -360,6 +417,7 @@ def run_self_play_games(
     policy_encoder_version: int | None = None,
     record_encoder_version: int = 3,
     rule_service=None,
+    device: str | None = None,
 ) -> SelfPlaySummary:
     """Run and record several neural-vs-neural games."""
     output = Path(output_path)
@@ -374,10 +432,11 @@ def run_self_play_games(
     schedule_rng = random.Random(seed_start)
     seat_offset = schedule_rng.randrange(2)
     first_player_offset = schedule_rng.randrange(2)
+    deck_pool = load_training_deck_pool(db, deck_source) if use_database_decks and db is not None else None
 
     for index in range(games):
         seed = seed_start + index
-        game_id = f"gen0-v3-{index + 1:06d}"
+        game_id = f"gen0-v3-{seed:06d}"  # seed is unique across parallel workers
         seat_flip = randomize_seating and _balanced_bit(index, seat_offset) == 1
         scheduled_first_player = first_player
         if randomize_seating:
@@ -412,6 +471,8 @@ def run_self_play_games(
             policy_encoder_version=policy_encoder_version,
             record_encoder_version=record_encoder_version,
             rule_service=rule_service,
+            device=device,
+            deck_pool=deck_pool,
         )
         decisions += decisions_written
         winner = _winner_from_result(state.result)
@@ -453,11 +514,12 @@ def _load_self_play_state(
     use_database_decks: bool,
     deck_source: str | None,
     allow_mirror_matches: bool,
+    deck_pool: TrainingDeckPool | None = None,
 ) -> tuple[GameState, tuple[int, int], tuple[int | None, int | None], tuple[str, str], int]:
     if use_database_decks:
-        available_ids = db.list_training_deck_ids(source=deck_source, active_only=True)
-        if not available_ids:
-            raise ValueError("No active training decks found in the database")
+        if deck_pool is None:
+            deck_pool = load_training_deck_pool(db, deck_source)
+        available_ids = deck_pool.ids
         if allow_mirror_matches:
             selected_ids = [rng.choice(available_ids) for _ in range(2)]
         else:
@@ -465,14 +527,9 @@ def _load_self_play_state(
                 raise ValueError("Need at least 2 active training decks")
             selected_ids = rng.sample(available_ids, 2)
 
-        unique_card_ids: set[int] = set()
-        for deck_id in selected_ids:
-            unique_card_ids.update(db.get_training_deck_card_ids(deck_id))
-        db.load(sorted(unique_card_ids))
-
         deck_slots = (1, 0) if seat_flip else (0, 1)
         assigned_ids = (selected_ids[deck_slots[0]], selected_ids[deck_slots[1]])
-        assigned = tuple(db.load_training_deck(deck_id) for deck_id in assigned_ids)
+        assigned = tuple(deck_pool.decks[deck_id] for deck_id in assigned_ids)
         p0 = assigned[0]
         p1 = assigned[1]
         deck_ids = assigned_ids
@@ -497,6 +554,9 @@ def _load_self_play_state(
     )
     _apply_extra_zones(state, 0, p0)
     _apply_extra_zones(state, 1, p1)
+    if use_database_decks:
+        # Every training deck, not only the two in this game
+        add_nameable_creatures(state, [spec.main_deck for spec in deck_pool.decks.values()])
     return state, deck_slots, deck_ids, deck_names, actual_first_player
 
 

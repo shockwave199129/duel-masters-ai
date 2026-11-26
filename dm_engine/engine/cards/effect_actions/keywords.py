@@ -4,6 +4,7 @@ from __future__ import annotations
 import random
 
 from engine.zone_mover import _new_uid
+from core.cards import CardDefinition
 from core.state import GameState, PendingTrigger
 from core.zones import Creature, HandCard, ManaCard, ShieldCard
 

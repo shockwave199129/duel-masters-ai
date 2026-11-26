@@ -1,9 +1,8 @@
 """engine/sba/actions/g_castle.py — State-based action: Rule 822 — G-Castle shield."""
 from __future__ import annotations
-from core.enums import CardType, CardSubtype, GlobalEffectType
+from core.enums import CardSubtype
 from core.state import GameState
-from core.zones import Creature
-from core.zones import GraveyardCard
+from core.zones import GraveyardCard, ShieldCard
 from core.cards import is_g_castle
 
 
@@ -41,6 +40,10 @@ def _sba_g_castle_shield(state: GameState) -> bool:
             else:
                 remaining_queue.append((queued_player, shield))
         if fired:
+            window = state.effect_stack.shield_break_window
+            if window is not None:
+                kept = {shield.uid for _, shield in remaining_queue}
+                window.standby_shields = [s for s in window.standby_shields if s.uid in kept]
             queue.clear()
             queue.extend(remaining_queue)
 

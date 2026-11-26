@@ -24,16 +24,20 @@ sys.path.insert(0, "dm_engine")
 from core.cards import CardDefinition
 from core.enums import CardSubtype, CardType, Civilization, EffectType, Phase
 from core.state import GameState, PlayerState, TurnInfo, PendingTrigger
-from core.zones import Creature
 from engine.effect_executor import execute_pending_trigger
 from engine.trigger_resolver import resolve_pending_triggers
 from core.cards import CardEffect
 from core.enums import EffectAction
 
 
+FAILURES: list[str] = []
+
+
 def check(name: str, condition: bool, detail: str = "") -> bool:
     status = "PASS" if condition else "FAIL"
     print(f"{status}: {name}" + (f" - {detail}" if detail else ""))
+    if not condition:
+        FAILURES.append(name)
     return condition
 
 
@@ -218,3 +222,7 @@ check("Rule 101.4a: Standby state is naturally enforced",
 print("\n" + "="*60)
 print("All tests completed!")
 print("="*60)
+
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+    sys.exit(1)

@@ -9,6 +9,7 @@ happens in observation.py when building the view each player sees.
 """
 
 from __future__ import annotations
+from core.card_scripts import DOES_NOT_UNTAP
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -42,6 +43,18 @@ class PlayerState:
     mana_zone:       list[ManaCard]       = field(default_factory=list)
     battle_zone:     list[Creature]       = field(default_factory=list)
     shield_zone:     list[ShieldCard]     = field(default_factory=list)
+    shields_broken_this_turn: int = 0
+    next_creature_discount: int = 0   # this turn only
+    spells_cast_this_turn: int = 0
+    creatures_put_this_turn: int = 0
+    played_free_this_turn: bool = False
+    extra_turns: int = 0              # turns still owed to this player
+    resolving:       list = field(default_factory=list)   # ResolvingCard: spells in use
+    mana_debts:      list = field(default_factory=list)   # (amount, civilization) due next turn
+    graveyard_seen:  frozenset = frozenset()   # uids at the last check
+    graveyard_left_this_turn: bool = False
+    loss_pending:    bool = False   # choosing whether to replace losing the game
+    ran_out_of_cards: bool = False   # the deck was empty, even briefly (rule 104.2b)
     graveyard:       list[GraveyardCard]  = field(default_factory=list)
     abyss_zone:      list[CardDefinition] = field(default_factory=list)  # banished cards
 
@@ -218,6 +231,11 @@ class PlayerState:
             return len(self.abyss_zone)
         return 0
 
+    def note_deck(self) -> None:
+        """Call after taking a card from the deck."""
+        if not self.deck:
+            self.ran_out_of_cards = True
+
     # ── Turn reset ────────────────────────────────────────────────────────────
 
     def reset_turn_flags(self) -> None:
@@ -236,6 +254,8 @@ class PlayerState:
             mana.untap()
         for creature in self.battle_zone:
             if creature.temp_flags.pop("silent_skill_skip_untap", False):
+                continue
+            if creature.definition.slug in DOES_NOT_UNTAP and not creature.temp_flags.get("abilities_ignored"):
                 continue
             creature.untap()
 
@@ -278,6 +298,9 @@ class PlayerState:
             remaining[card.id] = max(0, remaining.get(card.id, 0) - 1)
         for card in self.battle_zone:
             remaining[card.id] = max(0, remaining.get(card.id, 0) - 1)
+            for entry in card.evolution_stack:
+                under_id = entry.definition.id
+                remaining[under_id] = max(0, remaining.get(under_id, 0) - 1)
         for card in self.graveyard:
             remaining[card.id] = max(0, remaining.get(card.id, 0) - 1)
         if include_hidden_shields:

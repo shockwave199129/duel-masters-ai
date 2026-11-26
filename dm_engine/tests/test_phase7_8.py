@@ -5,7 +5,7 @@ sys.path.insert(0, "dm_engine")
 
 from core.enums import (
     EffectAction, GlobalEffectType, Civilization, CardType, CardSubtype,
-    INFINITY, Keyword, Phase
+    INFINITY, Phase
 )
 from core.global_effects import GlobalEffect, GlobalEffectRegistry
 from core.state import GameState, TurnInfo, PlayerState, EffectStack
@@ -16,15 +16,23 @@ from engine.battle_resolver import resolve_battle
 from engine.phase_controller import _end_turn
 
 
+FAILURES: list[str] = []
+
+
 def check(name: str, condition: bool, detail: str = "") -> bool:
     status = "✅ PASS" if condition else "❌ FAIL"
     print(f"{status}: {name}" + (f" - {detail}" if detail else ""))
+    if not condition:
+        FAILURES.append(name)
     return condition
 
 
 def make_game_state(turn_player: int = 0) -> GameState:
     p0 = PlayerState(player_index=0, player_name="P0")
     p1 = PlayerState(player_index=1, player_name="P1")
+    # Non-empty decks so the deck-out SBA does not end the game first
+    for player in (p0, p1):
+        player.deck = [make_card(900 + i) for i in range(5)]
     return GameState(
         players=[p0, p1],
         turn_info=TurnInfo(active_player=turn_player, turn_number=1),
@@ -572,3 +580,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("All Phase 7 + 8 tests completed")
     print("=" * 60)
+
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+    sys.exit(1)

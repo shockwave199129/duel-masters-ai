@@ -17,9 +17,9 @@ from __future__ import annotations
 import random
 from typing import Optional
 
-from .enums import Phase, CardSubtype
+from .enums import Phase
 from .cards import CardDefinition, DeckDefinition
-from .zones import HandCard, ShieldCard, Creature, HyperspatialCard, _new_uid
+from .zones import HandCard, ShieldCard, HyperspatialCard, _new_uid
 from .player_state import PlayerState
 from .state import GameState, TurnInfo
 from .global_effects import GlobalEffectRegistry
@@ -74,8 +74,17 @@ def initialize_game(
         global_effects=GlobalEffectRegistry(),
         game_id=game_id,
     )
+    add_nameable_creatures(state, (deck_p0, deck_p1))
 
     return state
+
+
+def add_nameable_creatures(state: GameState, decks) -> None:
+    """Let players name any creature found in these decks."""
+    for deck in decks:
+        for definition in deck.card_definitions.values():
+            if definition.is_creature():
+                state.nameable_creatures.setdefault(definition.name, definition.id)
 
 
 def _validate_deck(deck_def: DeckDefinition) -> None:

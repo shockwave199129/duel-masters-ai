@@ -9,6 +9,8 @@ Implements rules: 101.2, 112.2a, 112.3, 301.5, 405.1, 503.1, 504.1, 506.1,
 
 from __future__ import annotations
 
+from typing import Optional
+
 from ..enums import ActionType, Civilization, ManaUsage
 
 from .base import Action

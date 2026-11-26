@@ -1,7 +1,7 @@
 """engine/special_cards/neo.py — Neo card mechanics."""
 from __future__ import annotations
-from core.state import GameState
-from core.zones import Creature, EvolutionStackEntry, HandCard
+from core.enums import CardSubtype
+from core.zones import Creature
 
 
 def should_apply_gneo_all_leave_replacement(creature: Creature) -> bool:
@@ -15,8 +15,9 @@ def should_apply_gneo_all_leave_replacement(creature: Creature) -> bool:
     Rule 803.2a: The "when leaving" effect is a replacement effect. If another
     replacement effect was applied first, this cannot be applied.
     """
-    # Must be a NEO Evolution Creature (has NEO/G-NEO subtype + evolution stack)
-    if not creature.is_neo_evolution_creature():
+    # Only G-NEO has this ability, and only with a card underneath
+    if (creature.definition.card_subtype != CardSubtype.G_NEO
+            or not creature.is_neo_evolution_creature()):
         return False
     
     # Check if another replacement effect already applied (rule 803.2a)

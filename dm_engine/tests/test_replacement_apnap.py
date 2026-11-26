@@ -4,16 +4,18 @@ import sys
 sys.path.insert(0, "dm_engine")
 
 from core.state import GameState, TurnInfo, PlayerState, EffectStack
-from core.enums import Phase, Zone
 from engine.replacement import ReplacementEffect, ReplacementEffectRegistry, EventType
-from core.cards import CardDefinition
-from core.zones import Creature
+
+
+FAILURES: list[str] = []
 
 
 def check(name: str, condition: bool, detail: str = "") -> bool:
     """Print PASS/FAIL."""
     status = "✅ PASS" if condition else "❌ FAIL"
     print(f"{status}: {name}" + (f" - {detail}" if detail else ""))
+    if not condition:
+        FAILURES.append(name)
     return condition
 
 
@@ -358,3 +360,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("All replacement APNAP tests completed")
     print("=" * 60)
+
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+    sys.exit(1)

@@ -4,7 +4,7 @@ A creature with the 'cannot attack' keyword must be tapped.
 If such a creature is currently untapped, tap it immediately.
 """
 from __future__ import annotations
-from core.enums import CardType, Keyword
+from core.enums import Keyword
 from core.state import GameState
 
 

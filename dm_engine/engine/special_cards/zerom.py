@@ -1,7 +1,7 @@
 """engine/special_cards/zerom.py — Zerom card mechanics."""
 from __future__ import annotations
 from core.state import GameState
-from core.zones import Creature, EvolutionStackEntry, HandCard
+from core.zones import Creature
 from core.cards import CardDefinition
 
 

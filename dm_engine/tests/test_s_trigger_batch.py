@@ -8,15 +8,19 @@ from core.enums import Phase, Civilization, CardType, CardSubtype, Keyword, Acti
 from core.state import GameState, TurnInfo, PlayerState, AttackContext
 from core.zones import Creature, ShieldCard
 from core.cards import CardDefinition
-from core.actions import use_shield_trigger, pass_action
 from engine.action_executor import execute_action
 from engine.action_generator import get_legal_actions
 from engine.shield_resolver import resolve_shield_break_choice
 
 
+FAILURES: list[str] = []
+
+
 def check(name: str, condition: bool, detail: str = "") -> bool:
     status = "✅ PASS" if condition else "❌ FAIL"
     print(f"{status}: {name}" + (f" - {detail}" if detail else ""))
+    if not condition:
+        FAILURES.append(name)
     return condition
 
 
@@ -92,3 +96,7 @@ s4 = execute_action(s3, exec_actions[0], validate=False)
 check("First S-Trigger executed from hand", len(s4.players[1].graveyard) >= 1)
 
 print("\n" + "=" * 70)
+
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+    sys.exit(1)

@@ -253,6 +253,8 @@ class GodManager:
         )
         p_state.graveyard.insert(0, graveyard_card)
         state.global_effects.remove_by_source(primary.uid)
+        from engine.zone_mover import release_attached_cards
+        release_attached_cards(state, player, primary, reason=reason)
 
         inherited_tapped = primary.is_tapped
         inherited_sickness = primary.has_summoning_sickness

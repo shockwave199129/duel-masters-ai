@@ -127,6 +127,9 @@ class RuleKnowledgeService:
         self._phase_cache: dict[str, PhaseInfo | None] = {}
         self._keyword_cache: dict[str, KeywordRule | None] = {}
         self._sba_cache: list[StateBasedActionFact] | None = None
+        self._phase_rules_cache: dict[str, list[RuleFact]] = {}
+        self._ordered_rules: list[tuple[RuleFact, tuple[str, ...]]] = []
+        self._preloaded = False
 
     @classmethod
     def from_card_database(
@@ -145,6 +148,70 @@ class RuleKnowledgeService:
     def is_configured(self) -> bool:
         return bool(self.dsn)
 
+    def preload(self) -> bool:
+        """
+        Read all structured rules over one connection, so games never query.
+
+        Returns False, leaving on-demand queries in place, if loading fails.
+        """
+        if not self.dsn:
+            return False
+        try:
+            conn = self._connect()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT rule_number, text, rule_category, applies_in_phase,
+                               applies_in_zone, is_state_based, is_turn_based,
+                               is_keyword_rule, priority
+                        FROM dm_rules
+                        ORDER BY priority, rule_number
+                        """
+                    )
+                    ordered = [(self._rule_from_row(row), _tuple(row[3])) for row in cur.fetchall()]
+                    cur.execute(
+                        """
+                        SELECT phase_key, phase_name, phase_order, is_optional,
+                               can_repeat, rule_ref, description
+                        FROM dm_game_phases
+                        """
+                    )
+                    phases = [self._phase_from_row(row) for row in cur.fetchall()]
+                    cur.execute(
+                        """
+                        SELECT name, short_desc, full_rule_ref,
+                               overrides_summoning_sickness, is_triggered,
+                               is_activated, is_static, is_replacement,
+                               requires_declaration, usable_in_phase
+                        FROM dm_keywords
+                        """
+                    )
+                    keywords = [self._keyword_from_row(row) for row in cur.fetchall()]
+                    cur.execute(
+                        """
+                        SELECT rule_number, action_key, description,
+                               condition_json, effect_json, priority
+                        FROM dm_state_based_actions
+                        ORDER BY priority, action_key
+                        """
+                    )
+                    sbas = [self._sba_from_row(row) for row in cur.fetchall()]
+            finally:
+                conn.close()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Could not preload rules; querying on demand: %s", exc)
+            return False
+
+        self._ordered_rules = ordered
+        self._rule_cache = {rule.rule_number: rule for rule, _ in ordered}
+        self._phase_cache = {phase.phase_key: phase for phase in phases}
+        self._keyword_cache = {keyword.name.lower(): keyword for keyword in keywords}
+        self._sba_cache = sbas
+        self._phase_rules_cache = {}
+        self._preloaded = True
+        return True
+
     def get_rule(self, rule_number: str) -> RuleFact | None:
         if rule_number not in self._rule_cache:
             rows = self.get_rules([rule_number])
@@ -154,7 +221,7 @@ class RuleKnowledgeService:
     def get_rules(self, rule_numbers: Iterable[str]) -> dict[str, RuleFact]:
         numbers = [str(number) for number in rule_numbers]
         missing = [number for number in numbers if number not in self._rule_cache]
-        if missing and self.dsn:
+        if missing and self.dsn and not self._preloaded:
             try:
                 with self._connect() as conn:
                     with conn.cursor() as cur:
@@ -186,7 +253,7 @@ class RuleKnowledgeService:
         if phase_key in self._phase_cache:
             return self._phase_cache[phase_key]
         info = None
-        if self.dsn:
+        if self.dsn and not self._preloaded:
             try:
                 with self._connect() as conn:
                     with conn.cursor() as cur:
@@ -209,6 +276,15 @@ class RuleKnowledgeService:
 
     def get_phase_rules(self, phase: Phase | str) -> list[RuleFact]:
         phase_key = phase_key_for_engine_phase(phase) if isinstance(phase, Phase) else phase
+        if phase_key in self._phase_rules_cache:
+            return list(self._phase_rules_cache[phase_key])
+        if self._preloaded:
+            rules = [
+                rule for rule, phases in self._ordered_rules
+                if phase_key in phases or "any" in phases
+            ]
+            self._phase_rules_cache[phase_key] = rules
+            return list(rules)
         if not self.dsn:
             return []
         try:
@@ -226,7 +302,9 @@ class RuleKnowledgeService:
                         """,
                         (phase_key,),
                     )
-                    return [self._rule_from_row(row) for row in cur.fetchall()]
+                    rules = [self._rule_from_row(row) for row in cur.fetchall()]
+            self._phase_rules_cache[phase_key] = rules
+            return list(rules)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Could not query phase rules: %s", exc)
             return []
@@ -236,7 +314,9 @@ class RuleKnowledgeService:
         if key in self._keyword_cache:
             return self._keyword_cache[key]
         rule = None
-        if self.dsn:
+        if self._preloaded:
+            rule = self._keyword_cache.get(keyword_name.lower())
+        elif self.dsn:
             try:
                 with self._connect() as conn:
                     with conn.cursor() as cur:

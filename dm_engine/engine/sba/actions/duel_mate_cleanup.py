@@ -1,7 +1,6 @@
 """engine/sba/actions/duel_mate_cleanup.py — State-based action: Rule 820 — duel mate cleanup."""
 from __future__ import annotations
 from core.state import GameState
-from core.zones import Creature
 from engine.zone_mover import creature_to_hyperspatial_card
 
 

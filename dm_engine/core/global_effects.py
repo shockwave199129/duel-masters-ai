@@ -19,8 +19,11 @@ so it can be removed when that card leaves play or the duration expires.
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from .enums import Civilization, GlobalEffectType
+
+if TYPE_CHECKING:
+    from .zones import Creature
 
 
 @dataclass

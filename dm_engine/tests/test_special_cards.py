@@ -29,8 +29,6 @@ from core.cards import (
     is_zerom,
     is_zerom_creature,
     is_hyper_mode,
-    is_star_evolution,
-    is_dream_rare,
     is_duel_mate,
     is_g_castle,
     is_hyper_soul_x,
@@ -60,7 +58,6 @@ from engine.zone_mover import (
     move_shield_to_standby,
     move_standby_shield_to_hand,
     fortify_g_castle_to_shield,
-    fortify_shield_with_castle,
 )
 from engine.sba_checker import check_state_based_actions
 from engine.action_generator import _actions_for_hand_card
@@ -560,22 +557,16 @@ check("9d: G-Castle in hand generates fortify actions",
       len(fortify_actions_9d) >= 1,
       f"found {len(fortify_actions_9d)} fortify actions")
 
-# 9e) G-Castle can target a specific shield
-if fortify_actions_9d:
-    target_uids_9e = [a.target_uid for a in fortify_actions_9d]
-    check("9e: G-Castle fortify targets a specific shield",
-          shield_9d.uid in target_uids_9e,
-          f"targets={target_uids_9e}, shield_uid={shield_9d.uid}")
-else:
-    check("9e: G-Castle fortify targets a specific shield", False, "no fortify actions generated")
+# 9e) Rule 822.2b: a G Castle does not fortify an existing shield
+check("9e: G-Castle names no shield to fortify",
+      bool(fortify_actions_9d) and all(not a.target_uid for a in fortify_actions_9d))
 
-# 9f) G-Castle cannot fortify without shields
+# 9f) Rule 822.2a: it becomes a new shield, so no shields are needed
 state_9f = make_state(p0_hand=[g_castle_hand])
+state_9f.players[0].mana_zone.append(mana_9d)
 actions_9f = _actions_for_hand_card(0, g_castle_hand.uid, g_castle_hand_defn, state_9f)
-fortify_actions_9f = [a for a in actions_9f if a.action_type == ActionType.FORTIFY_CASTLE]
-check("9f: G-Castle cannot fortify without shields",
-      len(fortify_actions_9f) == 0,
-      f"found {len(fortify_actions_9f)} fortify actions (expected 0)")
+check("9f: G-Castle can be used with no shields",
+      any(a.action_type == ActionType.FORTIFY_CASTLE for a in actions_9f))
 
 # 9g) G-Castle fortify places castle under shield
 shield_9g = ShieldCard(definition=card(905, "Shield 9g", card_type=CardType.CREATURE))
@@ -710,7 +701,6 @@ check("12b: face=1 returns other face keywords",
       chars_1["keywords"] == frozenset({Keyword.DOUBLE_BREAKER}))
 
 # 12c) Twinpact generates actions for both faces
-from core.actions import Action as _Action
 from engine.action_generator import _actions_for_hand_card
 mana_card = card(1210, "Mana-Water", civs=(Civilization.WATER,), cost=0)
 mana_card_2 = card(1211, "Mana-Water2", civs=(Civilization.WATER,), cost=0)

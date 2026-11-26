@@ -12,6 +12,7 @@ PROJECT_ROOT = DM_ENGINE_ROOT.parent
 if str(DM_ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(DM_ENGINE_ROOT))
 
+import thread_limits  # noqa: F401  # must come before torch is imported
 from bot.neural_model import DEFAULT_DROPOUT, DEFAULT_HIDDEN_SIZE, DEFAULT_NUM_BLOCKS
 from training.ppo_trainer import train_ppo
 
@@ -25,6 +26,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train PPO policy from self-play JSONL")
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--init-checkpoint",
+        type=Path,
+        default=None,
+        help="Continue from this model, normally the one that generated the self-play data",
+    )
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -49,6 +57,8 @@ def main() -> None:
     summary = train_ppo(
         input_path=args.input,
         output_path=args.output,
+        device=args.device,
+        init_checkpoint=args.init_checkpoint,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,

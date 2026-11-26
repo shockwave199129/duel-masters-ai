@@ -19,12 +19,10 @@ Objects defined here:
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Optional
 from uuid import uuid4
 
-from ..enums import Civilization, Keyword, CardSubtype, CDAFormulaType, EffectAction, INFINITY
-from ..cards import CardDefinition, CardEffect
+from ..enums import Civilization
+from ..cards import CardDefinition
 
 
 def _new_uid() -> str:
@@ -160,6 +158,18 @@ class ManaCard:
 
 
 # ── Shield Card ───────────────────────────────────────────────────────────────
+
+@dataclass
+class ResolvingCard:
+    """
+    A spell between being cast and reaching its destination (rule 409.1b). It is
+    not counted as a card in any zone.
+    """
+    definition:  CardDefinition
+    uid:         str
+    destination: str = "graveyard"   # "graveyard" | "deck_bottom"
+    owner:       int | None = None   # when cast by someone who does not own it
+
 
 @dataclass
 class ShieldCard:

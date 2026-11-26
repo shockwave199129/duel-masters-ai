@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.actions import Action, ActionType, activate_ability
+from core.actions import ActionType, activate_ability
 from core.cards import CardDefinition, CardEffect
 from core.enums import (
     CDAFormulaType,
@@ -23,7 +23,6 @@ from core.enums import (
     EffectAction,
     EffectType,
     GlobalEffectType,
-    Keyword,
     ManaUsage,
     Phase,
     TriggerEvent,

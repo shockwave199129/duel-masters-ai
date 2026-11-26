@@ -13,7 +13,6 @@ from typing import Optional
 from curl_cffi import requests
 
 from scripts.api_client import (
-    BASE_URL,
     api_get,
     api_paginate,
     make_api_session,

@@ -40,11 +40,18 @@ class FakeDb:
         cards = list(deck0.card_definitions.values()) + list(deck1.card_definitions.values())
         self._by_id = {card.id: card for card in cards}
 
-    def sample_training_decks(self, rng, *, count=2, source=None, allow_mirror=False):
-        assert count == 2
+    def list_training_deck_ids(self, *, source=None, active_only=True):
         assert source in (None, "demo")
-        assert not allow_mirror
-        return list(self.specs)
+        return [deck_id for deck_id, _ in self.specs]
+
+    def get_training_deck_card_ids(self, deck_id):
+        return set(dict(self.specs)[deck_id].main_deck.card_counts)
+
+    def load(self, card_ids=None):
+        return len(self._by_id)
+
+    def load_training_deck(self, deck_id):
+        return dict(self.specs)[deck_id]
 
     def require(self, card_id):
         return self._by_id[card_id]
@@ -67,8 +74,9 @@ state, deck_slots, deck_ids, deck_names, first_player = _load_self_play_state(
     deck_source="demo",
     allow_mirror_matches=False,
 )
-check("DB deck mode assigns first sampled deck to P0 without flip", deck_ids == (101, 202))
-check("DB deck mode initializes P0 deck composition", state.players[0].deck_composition == db.specs[0][1].main_deck.card_counts)
+sampled_a = tuple(random.Random(7).sample([101, 202], 2))
+check("DB deck mode assigns first sampled deck to P0 without flip", deck_ids == sampled_a)
+check("DB deck mode initializes P0 deck composition", state.players[0].deck_composition == db.load_training_deck(sampled_a[0]).main_deck.card_counts)
 check("Explicit first player is honored", first_player == 0)
 
 _, flipped_slots, flipped_ids, _, _ = _load_self_play_state(
@@ -83,7 +91,8 @@ _, flipped_slots, flipped_ids, _, _ = _load_self_play_state(
     deck_source="demo",
     allow_mirror_matches=False,
 )
-check("DB deck mode flips sampled decks onto opposite seats", flipped_ids == (202, 101))
+sampled_b = tuple(random.Random(8).sample([101, 202], 2))
+check("DB deck mode flips sampled decks onto opposite seats", flipped_ids == sampled_b[::-1])
 check("Flipped source slots are recorded", flipped_slots == (1, 0))
 
 p0_action = Action(player=0, action_type=ActionType.PASS)

@@ -1,7 +1,9 @@
 """engine/evolution_rules.py — Evolution base validation (rule 801)."""
 from __future__ import annotations
 
+from core.card_scripts import EVOLUTION_BASE_RACE
 from core.cards import CardDefinition
+from core.continuous_rules import has_race
 from core.enums import CardSubtype, CardType
 from core.zones import Creature
 
@@ -19,6 +21,9 @@ def is_valid_evolution_base(evolution_def: CardDefinition, base: Creature) -> bo
         return False
     if base.definition.card_type != CardType.CREATURE:
         return False
+    race = EVOLUTION_BASE_RACE.get(evolution_def.slug)
+    if race is not None:
+        return has_race(base.definition, race)
 
     has_race_match = (
         evolution_def.evolution_source_races

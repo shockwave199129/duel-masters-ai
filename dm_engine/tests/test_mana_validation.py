@@ -3,16 +3,21 @@
 import sys
 sys.path.insert(0, "dm_engine")
 
-from core.enums import Civilization, ManaUsage
+from core.enums import Civilization
 from core.zones import ManaCard
 from unittest.mock import MagicMock
 from engine.action_generator import _get_mana_combinations
+
+
+FAILURES: list[str] = []
 
 
 def check(name: str, condition: bool, detail: str = "") -> bool:
     """Print PASS/FAIL."""
     status = "✅ PASS" if condition else "❌ FAIL"
     print(f"{status}: {name}" + (f" - {detail}" if detail else ""))
+    if not condition:
+        FAILURES.append(name)
     return condition
 
 
@@ -158,3 +163,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("All mana validation tests completed")
     print("=" * 60)
+
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+    sys.exit(1)

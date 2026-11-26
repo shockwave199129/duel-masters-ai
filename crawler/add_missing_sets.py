@@ -27,7 +27,7 @@ from scripts.api_client import (
 from scripts.api_set_page import get_set_card_links
 from scripts.sets_crawler import _parse_sets_page
 
-DSN = os.getenv("DATABASE_URL", "postgresql://postgres:12345@localhost:5432/dm_database")
+DSN = os.getenv("DATABASE_URL")
 HTML_FILE = os.path.join(
     os.path.dirname(__file__),
     "List of Duel Masters OCG Sets _ Duel Masters Wiki _ Fandom.html",
@@ -53,6 +53,8 @@ def main():
         help="Only process specific set codes",
     )
     args = parser.parse_args()
+    if not DSN:
+        sys.exit("DATABASE_URL is not set")
 
     log.info("Parsing downloaded HTML: %s", HTML_FILE)
     with open(HTML_FILE, encoding="utf-8") as handle:

@@ -5,7 +5,7 @@ Updated after full read of Duel Masters Comprehensive Game Rules Ver. 1.50.
 Rule references are cited inline (e.g. rule 501, rule 112.2a).
 """
 
-from enum import Enum, auto
+from enum import Enum
 
 
 # ── Civilizations ─────────────────────────────────────────────────────────────
@@ -179,6 +179,10 @@ class Keyword(Enum):
     VEIL                    = "veil"
     FORTRESS_KEYWORD        = "fortress"
     EX_LIFE                 = "ex_life"             # shield a card when entering
+
+    # ── Twinpact cards only ───────────────────────────────────────────────────
+    LAST_BURST              = "last_burst"          # creature destroyed: may cast the spell side
+    MEGA_LAST_BURST         = "mega_last_burst"     # left to hand, mana or graveyard: same
 
     # ── Over Drive (rule 112.2d) ─────────────────────────────────────────────────
     OVER_DRIVE              = "over_drive"           # tap additional mana for bonus ability

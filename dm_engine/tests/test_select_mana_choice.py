@@ -13,7 +13,7 @@ from core.enums import (
 )
 from core.player_state import PlayerState
 from core.state import GameState, PendingTrigger, TurnInfo, AwaitedChoice
-from core.zones import Creature, HandCard, ManaCard
+from core.zones import Creature, ManaCard
 from engine.action_generator import get_legal_actions, _get_mana_combinations
 from engine.effect_executor import (
     execute_pending_trigger,

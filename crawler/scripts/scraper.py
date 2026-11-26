@@ -16,6 +16,7 @@ Entry point:
 """
 
 from __future__ import annotations
+import copy
 import json
 import logging
 import re
@@ -165,6 +166,23 @@ def _normalize_table_key(text: str) -> str:
     return _clean(text).lower().rstrip(":")
 
 
+def _english_text(cell: Tag) -> str:
+    """
+    The card's English text. Cost icons carry numbers printed nowhere else, so
+    they are kept as {N4} or {DN14}. A rule across the cell separates the Hyper
+    Mode part, kept as ----.
+    """
+    cell = copy.copy(cell)
+    for icon in cell.find_all("img"):
+        alt = icon.get("alt") or ""
+        icon.replace_with(f" {{{alt}}} " if re.fullmatch(r"[LWDFN]+\d+", alt) else "")
+    for rule in cell.find_all("hr"):
+        rule.replace_with(" ---- ")
+    for line_break in cell.find_all("br"):
+        line_break.replace_with(" ")
+    return _clean(cell.get_text())
+
+
 def _parse_civilizations(text: str) -> list[str]:
     CIVS = ["Fire", "Water", "Nature", "Light", "Darkness", "Zero", "Jokers"]
     return [c for c in CIVS if c.lower() in text.lower()]
@@ -193,7 +211,7 @@ def _extract_abilities_from_text(text: str) -> list[str]:
     abilities = []
     for part in str(text).split("■"):
         part = _clean(part)
-        if len(part) > 5:
+        if len(part) > 2:  # drops stray marks, keeps short keywords
             abilities.append("■ " + part)
     return abilities
 
@@ -360,13 +378,17 @@ def _parse_wikitable_faces(table: Tag) -> list[dict]:
     current: Optional[dict] = None
 
     for row in table.find_all("tr"):
+        # Some abilities sit in a small table inside a cell. Its rows belong to
+        # that cell's text, not to another side of the card.
+        if row.find_parent("table") is not table:
+            continue
         cols = row.find_all(["th", "td"], recursive=False)
         if len(cols) >= 2:
             if current is None:
                 current = {"name": "", "fields": {}}
                 faces.append(current)
             key = _normalize_table_key(cols[0].get_text())
-            val = _clean(cols[1].get_text())
+            val = _english_text(cols[1]) if key == "english text" else _clean(cols[1].get_text())
             current["fields"][key] = val
             continue
 
@@ -389,7 +411,9 @@ def _face_to_raw(face: dict) -> dict:
         "power": _extract_power(fields.get("power", "")),
         "card_type": card_type,
         "card_subtype": card_subtype,
-        "civilizations": _parse_civilizations(fields.get("civilization", fields.get("civs", ""))),
+        # Multicolored cards label the row "Civilizations"
+        "civilizations": _parse_civilizations(
+            fields.get("civilization") or fields.get("civilizations") or fields.get("civs", "")),
         "races": [
             _clean(r)
             for r in re.split(r"[/\n,]", fields.get("race", fields.get("races", "")))
@@ -397,6 +421,18 @@ def _face_to_raw(face: dict) -> dict:
         ],
         "abilities": _extract_abilities_from_text(fields.get("english text", "")),
     }
+
+
+def card_civilizations(faces: list[dict]) -> list[str]:
+    """
+    The civilizations the card itself has. A Twinpact card (a creature side and
+    a spell side) counts as its creature side, for example in the mana zone; the
+    spell side's civilizations only matter when that spell is cast.
+    """
+    kinds = [str(face.get("card_type") or "") for face in faces]
+    if len(faces) == 2 and kinds[0].endswith("Creature") and kinds[1].endswith("Spell"):
+        faces = faces[:1]
+    return sorted({c for face in faces for c in face["civilizations"]})
 
 
 def _parse_wikitable(soup: BeautifulSoup, set_code: str, source_url: str) -> Optional[RawCard]:
@@ -425,7 +461,7 @@ def _parse_wikitable(soup: BeautifulSoup, set_code: str, source_url: str) -> Opt
 
     cost = primary["cost"]
     power = primary["power"]
-    civilizations = sorted({c for face in face_rows for c in face["civilizations"]})
+    civilizations = card_civilizations(face_rows)
     races = sorted({r for face in face_rows for r in face["races"]})
 
     content = soup.find("div", class_="mw-content-text") or soup

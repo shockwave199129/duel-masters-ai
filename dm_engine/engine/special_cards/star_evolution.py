@@ -1,7 +1,6 @@
 """engine/special_cards/star_evolution.py — Star Evolution card mechanics."""
 from __future__ import annotations
-from core.state import GameState
-from core.zones import Creature, EvolutionStackEntry, HandCard
+from core.zones import Creature
 
 
 def is_star_evolution(definition) -> bool:

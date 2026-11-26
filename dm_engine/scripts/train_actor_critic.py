@@ -12,6 +12,7 @@ PROJECT_ROOT = DM_ENGINE_ROOT.parent
 if str(DM_ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(DM_ENGINE_ROOT))
 
+import thread_limits  # noqa: F401  # must come before torch is imported
 from bot.neural_model import DEFAULT_DROPOUT, DEFAULT_HIDDEN_SIZE, DEFAULT_NUM_BLOCKS
 from training.train_actor_critic import train_actor_critic_model
 
@@ -25,6 +26,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train ActionCriticNet from self-play JSONL")
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -45,6 +47,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not equalize decision counts between player 0 and player 1",
     )
+    parser.add_argument(
+        "--data-on-gpu", action="store_true",
+        help="Keep the whole training set on the training device (uses more GPU memory)",
+    )
+    parser.add_argument(
+        "--warmup-steps", type=int, default=0,
+        help="Raise the learning rate evenly over this many steps (for large batches)",
+    )
     return parser
 
 
@@ -58,6 +68,7 @@ def main() -> None:
     summary = train_actor_critic_model(
         input_path=args.input,
         output_path=args.output,
+        device=args.device,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
@@ -70,6 +81,8 @@ def main() -> None:
         value_coef=args.value_coef,
         entropy_coef=args.entropy_coef,
         balance_players=not args.no_balance_players,
+        data_on_gpu=args.data_on_gpu,
+        warmup_steps=args.warmup_steps,
     )
     logger.info(
         "Training done: rows=%s epochs=%s final_loss=%.6f policy=%.6f value=%.6f entropy=%.6f output=%s",

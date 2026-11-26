@@ -5,9 +5,7 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from core.cards import CardDefinition
-from core.enums import CardSubtype, CardType, Civilization, Keyword, Phase
-from core.player_state import PlayerState
-from core.state import GameState, TurnInfo
+from core.enums import CardSubtype, CardType, Civilization, Keyword
 from core.zones import Creature
 
 PASS = "✅"

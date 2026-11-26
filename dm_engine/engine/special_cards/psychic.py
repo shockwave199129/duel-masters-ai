@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Optional
 from core.state import GameState
-from core.zones import Creature, EvolutionStackEntry, HandCard
+from core.zones import Creature
 from core.cards import CardDefinition
 from core.enums import CardSubtype
 
@@ -20,7 +20,6 @@ def awaken_psychic_creature(
     entered_turn, power_modifiers, and applied effects are all preserved.
     Rule 805.6: The awakened creature does not suffer from summoning sickness.
     """
-    from core.cards import CardDefinition  # local import to avoid circular deps
     creature = state.players[player].find_creature(creature_uid)
     if creature is None:
         raise ValueError(f"Creature {creature_uid} not found for awaken")
@@ -160,7 +159,6 @@ def apply_psychic_release(
     Apply the Psychic Release replacement effect: flip to lower-cost face, stay in BZ.
     (Rule 805.1b)
     """
-    from core.cards import CardDefinition
     creature = state.players[player].find_creature(creature_uid)
     if creature is None:
         raise ValueError(f"Creature {creature_uid} not found for psychic_release")

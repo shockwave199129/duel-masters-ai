@@ -12,13 +12,10 @@ import sys
 sys.path.insert(0, "dm_engine")
 
 from core.cards import CardDefinition, DeckDefinition
-from core.enums import CardType, CardSubtype, Civilization, Phase
-from core.zones import Creature, HyperspatialCard, _new_uid
+from core.enums import CardType, CardSubtype, Civilization
+from core.zones import Creature, HyperspatialCard
 from core.initializer import initialize_game
-from core.player_state import PlayerState
-from core.state import GameState
-from engine.zone_mover import move_battle_to_hyperspatial, awaken_psychic_creature, dragsolve_dragheart
-from engine.sba_checker import check_state_based_actions
+from engine.zone_mover import move_battle_to_hyperspatial
 
 
 failed = 0

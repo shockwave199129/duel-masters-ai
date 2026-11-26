@@ -8,15 +8,19 @@ from core.enums import Phase, Civilization, CardType, CardSubtype, Keyword, Acti
 from core.state import GameState, TurnInfo, PlayerState, ShieldBreakWindow
 from core.zones import HandCard, ShieldCard
 from core.cards import CardDefinition
-from core.actions import use_sabaki_z, pass_action
 from engine.action_executor import execute_action
 from engine.action_generator import get_legal_actions
 from engine.shield_break_window import finish_declarations
 
 
+FAILURES: list[str] = []
+
+
 def check(name: str, condition: bool, detail: str = "") -> bool:
     status = "✅ PASS" if condition else "❌ FAIL"
     print(f"{status}: {name}" + (f" - {detail}" if detail else ""))
+    if not condition:
+        FAILURES.append(name)
     return condition
 
 
@@ -77,3 +81,7 @@ check("Sabaki Z creature summoned", len(after.players[1].battle_zone) == 1)
 check("Sabaki Z card left hand", len(after.players[1].hand) == 0)
 
 print("\n" + "=" * 70)
+
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+    sys.exit(1)
