@@ -189,6 +189,10 @@ def check_ex_life_shields(state: GameState) -> bool:
     return fired
 
 
+def _waiting_on_replacement(creature: Creature) -> bool:
+    return bool(creature.temp_flags.get("leaving") or creature.temp_flags.get("replacing"))
+
+
 def check_power_zero(state: GameState) -> bool:
     """Rule 703.4c: Creature with power ≤ 0 → destroyed."""
     fired = False
@@ -196,7 +200,7 @@ def check_power_zero(state: GameState) -> bool:
         creatures_to_destroy = [
             c for c in state.players[player_idx].battle_zone
             if c.definition.card_type == CardType.CREATURE
-            and not c.temp_flags.get("leaving")
+            and not _waiting_on_replacement(c)
             and c.compute_power(state) <= 0
         ]
         for creature in creatures_to_destroy:
@@ -210,7 +214,7 @@ def check_battle_losers(state: GameState) -> bool:
     for player_idx in range(2):
         creatures_to_destroy = [
             c for c in state.players[player_idx].battle_zone
-            if c.temp_flags.get("lost_battle", False) and not c.temp_flags.get("leaving")
+            if c.temp_flags.get("lost_battle", False) and not _waiting_on_replacement(c)
         ]
         for creature in creatures_to_destroy:
             fired |= _destroy_creature(state, player_idx, creature, "battle")

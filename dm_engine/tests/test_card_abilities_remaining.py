@@ -17,7 +17,9 @@ from core.enums import (
 )
 from core.player_state import PlayerState
 from core.state import AttackContext, GameState, TurnInfo
-from core.zones import Creature, GraveyardCard, HandCard, ManaCard, ShieldCard
+from core.zones import (
+    Creature, GraveyardCard, HandCard, ManaCard, PowerModifier, ShieldCard,
+)
 from engine.action_executor import execute_action
 from engine.action_generator import get_legal_actions
 from engine.phase_controller import _start_turn
@@ -782,6 +784,53 @@ for present in (False, True):
     back = Observation.build(state, 1).opponent_state.hand_cards[0].name
     check(f"Spell Del Fin present={present}: you see the opponent's hand={present}",
           (seen == "secret") == present and back is None)
+
+# ── A replacement is carried out before the creature is checked again ──────
+def zeroed(state, target):
+    """Drop a creature to 0 power and let the state-based actions see it."""
+    target.power_modifiers.append(PowerModifier(
+        amount=-9000, source_uid="x", duration="until_end_of_turn"))
+    return resolve_pending_triggers(check_state_based_actions(state))
+
+
+def keep_replacing(state, limit=12):
+    """Always take the replacement over letting the creature leave."""
+    asked = 0
+    while waiting(state) is not None and asked < limit:
+        options = waiting(state).valid_options
+        wanted = [o for o in options if o != "leave"]
+        state = pick(state, wanted[0])
+        asked += 1
+    return state, asked
+
+
+state = make_state()
+doomed = creature(state, 0, named("T_Anago", civs=(W,), power=1000))
+creature(state, 0, named("T_Anago", civs=(W,), power=1000))
+run, asked = keep_replacing(zeroed(state, doomed))
+# Taking both offers: the first one's own Saver then steps in for the second.
+# Each applies once in the chain, so it ends there.
+check("Saver at 0 power: each Saver is used once, with no endless asking",
+      waiting(run) is None and len(run.players[0].battle_zone) == 1 and asked == 2,
+      f"asked={asked} left={len(run.players[0].battle_zone)}")
+
+for cards, expected in ((2, 1), (5, 2)):
+    state = make_state()
+    bell = creature(state, 0, named("Abyssbell_=_Jashin_Emperor", power=5000))
+    hand(state, 0, *[card(f"h{i}") for i in range(cards)])
+    run, asked = keep_replacing(zeroed(state, bell), limit=30)
+    check(f"Abyssbell at 0 power with {cards} cards: paid {expected} time(s), then it leaves",
+          waiting(run) is None and not run.players[0].battle_zone
+          and len(run.players[0].hand) == cards - 2 * expected,
+          f"asked={asked} hand={len(run.players[0].hand)}")
+
+state = make_state()
+first = creature(state, 0, named("Ater_Gorghini", power=6000))
+creature(state, 0, card("bystander"))
+run, asked = keep_replacing(zeroed(state, first))
+check("Ater at 0 power: another is destroyed once, then it leaves",
+      waiting(run) is None and not run.players[0].battle_zone and asked <= 2,
+      f"asked={asked}")
 
 print(f"\n{len(FAILURES)} failed")
 sys.exit(1 if FAILURES else 0)

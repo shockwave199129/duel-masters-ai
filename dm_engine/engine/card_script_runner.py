@@ -945,6 +945,12 @@ def _step_decide_leave(ctx, params, answer):
         return Ask(player, choices, prompt=f"{creature.definition.name} would leave. Replace it?")
 
     chosen = next((o for o in options if o.id == answer), None)
+    if chosen is not None and not chosen.mandatory:
+        # State-based actions leave the creature alone until the replacement has
+        # been carried out; otherwise they would act on it again first and ask
+        # the same question for ever. Card effects can still affect it.
+        creature.temp_flags[leave_rules.REPLACING_FLAG] = True
+        ctx.queue.insert(1, ("replacement_done", {"uid": creature.uid}))
     if chosen is None:
         zone_mover.leave_battle_zone(
             state, player, creature, reason=event["reason"], to_zone=event["to_zone"])
@@ -969,6 +975,14 @@ def _step_decide_leave(ctx, params, answer):
             "count": rule["count"], "chosen": [], "keep": creature.uid, "used": used}))
     elif chosen.kind == "shuffle_grave":
         ctx.then(("shuffle_from_graveyard", {"count": rule["count"], "chosen": []}))
+
+
+def _step_replacement_done(ctx, params, answer):
+    from engine.leave_rules import REPLACING_FLAG
+
+    found = ctx.state.find_creature_anywhere(params["uid"])
+    if found:
+        found[1].temp_flags.pop(REPLACING_FLAG, None)
 
 
 def _destroy_for_replacement(state: GameState, uid: str, used) -> None:
@@ -1144,6 +1158,7 @@ _HANDLERS = {
     "put_under_from_hand": _step_put_under_from_hand,
     "deck_to_shield": _step_deck_to_shield,
     "decide_leave": _step_decide_leave,
+    "replacement_done": _step_replacement_done,
     "destroy_instead": _step_destroy_instead,
     "choose_destroy_instead": _step_choose_destroy_instead,
     "mana_to_graveyard": _step_mana_to_graveyard,

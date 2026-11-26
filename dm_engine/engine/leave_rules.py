@@ -15,7 +15,8 @@ from core.continuous_rules import has_abilities, has_race
 from core.enums import CardType, GameResult
 from core.state import GameState
 
-LEAVING_FLAG = "leaving"
+LEAVING_FLAG = "leaving"        # its controller is choosing how it leaves
+REPLACING_FLAG = "replacing"    # the chosen replacement is being carried out
 DESTRUCTION_REASONS = frozenset({"destroyed", "battle", "sacrificed", "effect"})
 
 

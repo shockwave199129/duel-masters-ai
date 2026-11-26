@@ -95,6 +95,10 @@ def resolve_pending_triggers(state: GameState) -> GameState:
                 resolved,
             )
             s.effect_stack.pending_triggers.clear()
+            for player in s.players:
+                for creature in player.battle_zone:
+                    creature.temp_flags.pop("leaving", None)
+                    creature.temp_flags.pop("replacing", None)
             for player in s.players:  # no spell is left stuck half-used
                 for card in list(player.resolving):
                     finish_spell(s, player.player_index, card.uid)
