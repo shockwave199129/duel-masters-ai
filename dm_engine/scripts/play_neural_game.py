@@ -56,7 +56,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="neural-vs-random",
     )
     parser.add_argument("--human-player", type=int, choices=[0, 1], default=0)
-    parser.add_argument("--epsilon", type=float, default=0.05)
+    parser.add_argument("--epsilon", type=float, default=0.0, help="Chance of a random move; 0 shows the model's own play")
     parser.add_argument("--max-steps", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=None, help="Optional seed for reproducible shuffle/bot choices")
     parser.add_argument("--first-player", type=int, choices=[0, 1], default=0)

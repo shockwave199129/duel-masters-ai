@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS card_effects (
 
 ALTER TABLE card_effects ADD COLUMN IF NOT EXISTS face_index INT;
 ALTER TABLE card_effects ADD COLUMN IF NOT EXISTS face_name TEXT;
+ALTER TABLE card_effects ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Official rulings
 CREATE TABLE IF NOT EXISTS card_rulings (

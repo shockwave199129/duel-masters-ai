@@ -32,7 +32,7 @@ def resolve_battle(state: GameState) -> GameState:
     if defender_result is None:
         s.turn_info.phase = Phase.END_OF_ATTACK
         return s
-    _, defender = defender_result
+    defender_player, defender = defender_result
 
     # Fire ON_BATTLE trigger (both participants)
     from engine.trigger_registry import fire_trigger
@@ -40,7 +40,7 @@ def resolve_battle(state: GameState) -> GameState:
         "attacker_uid": attacker.uid,
         "defender_uid": defender.uid,
         "attacker_player": ctx.attacker_player,
-        "defender_player": ctx.blocker_player if ctx.blocker_uid else ctx.attacker_player,
+        "defender_player": defender_player,
     }, attacker.uid)
 
     attacker_always_wins = _wins_battles(attacker)
@@ -101,7 +101,7 @@ def resolve_battle(state: GameState) -> GameState:
         fire_trigger(s, TriggerEvent.ON_WIN_BATTLE, {
             "source_uid": defender.uid,
             "source_card_id": defender.id,
-            "controller": ctx.blocker_player if ctx.blocker_uid else ctx.attacker_player,
+            "controller": defender_player,
             "opponent_uid": attacker.uid,
         }, defender.uid)
 

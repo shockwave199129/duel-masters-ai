@@ -22,13 +22,12 @@ from core.enums import (
     CardType,
     Civilization,
     GlobalEffectType,
-    Keyword,
     Phase,
 )
 from core.global_effects import GlobalEffect, GlobalEffectRegistry
 from core.player_state import PlayerState
 from core.state import GameState, TurnInfo
-from core.zones import Creature, ShieldCard
+from core.zones import Creature
 from engine.layers import Layer, LayerEffectRegistry, LayeredEffect
 
 PASS = "✅"

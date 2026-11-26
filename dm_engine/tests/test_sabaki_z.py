@@ -8,7 +8,6 @@ from core.enums import Phase, Civilization, CardType, CardSubtype, Keyword, Acti
 from core.state import GameState, TurnInfo, PlayerState, ShieldBreakWindow
 from core.zones import HandCard, ShieldCard
 from core.cards import CardDefinition
-from core.actions import use_sabaki_z, pass_action
 from engine.action_executor import execute_action
 from engine.action_generator import get_legal_actions
 from engine.shield_break_window import finish_declarations

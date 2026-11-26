@@ -18,11 +18,11 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 from typing import Optional, Any
 
-from .enums import Phase, GameResult, Zone, Civilization, ActionType
+from .enums import Phase, GameResult, Civilization, ActionType
 from .cards import CardDefinition, CardEffect
-from .zones import Creature, HandCard, ShieldCard
+from .zones import Creature, ShieldCard
 from .player_state import PlayerState
-from .global_effects import GlobalEffectRegistry, GlobalEffect
+from .global_effects import GlobalEffectRegistry
 
 
 # ── Pending Trigger ───────────────────────────────────────────────────────────
@@ -72,6 +72,7 @@ class AwaitedChoice:
     min_choices:    int = 1
     max_choices:    int = 1
     prompt:         str = ""        # human-readable description
+    trigger:        Any = None      # the paused PendingTrigger, resumed by the answer
 
     def __repr__(self) -> str:
         return (

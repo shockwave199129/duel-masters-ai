@@ -24,7 +24,6 @@ sys.path.insert(0, "dm_engine")
 from core.cards import CardDefinition
 from core.enums import CardSubtype, CardType, Civilization, EffectType, Phase
 from core.state import GameState, PlayerState, TurnInfo, PendingTrigger
-from core.zones import Creature
 from engine.effect_executor import execute_pending_trigger
 from engine.trigger_resolver import resolve_pending_triggers
 from core.cards import CardEffect

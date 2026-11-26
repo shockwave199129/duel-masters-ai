@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import multiprocessing as mp
 import tempfile
@@ -43,6 +42,7 @@ def _worker_run(payload: dict[str, Any]) -> dict[str, Any]:
     db = CardDatabase(dsn)
     db.load()
     rule_service = RuleKnowledgeService.from_card_database(db)
+    rule_service.preload()
     summary = run_self_play_games(db=db, rule_service=rule_service, **payload["kwargs"])
     shard_path = Path(payload["shard_path"])
     return {"summary": summary.__dict__, "shard_path": str(shard_path)}

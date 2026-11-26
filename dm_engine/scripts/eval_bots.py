@@ -49,7 +49,7 @@ def _make_bot(spec: str, *, seed: int, model_path: Path):
         return HeuristicBot(seed=seed)
     if spec.startswith("checkpoint:") or spec == "neural":
         path = model_path if spec == "neural" else Path(spec.split(":", 1)[1])
-        return NeuralBot(model_path=path, seed=seed)
+        return NeuralBot(model_path=path, seed=seed, epsilon=0.0)
     raise ValueError(f"Unsupported opponent spec: {spec}")
 
 
@@ -62,6 +62,7 @@ def main() -> None:
     db = CardDatabase(args.dsn)
     db.load()
     rule_service = RuleKnowledgeService.from_card_database(db)
+    rule_service.preload()
     deck_names = ("Deck 1", "Deck 2")
     results: list[dict[str, object]] = []
     opponent_specs = [item.strip() for item in args.opponents.split(",") if item.strip()]
@@ -69,7 +70,7 @@ def main() -> None:
         for game_index in range(args.games):
             seed = args.seed + opponent_index * 1000 + game_index
             state = load_prebuilt_game_json(args.deck_json, db, first_player=0, seed=seed, game_id=f"eval-{opponent_spec}-{game_index}")
-            bot0 = NeuralBot(model_path=args.model_path, seed=seed, rule_service=rule_service)
+            bot0 = NeuralBot(model_path=args.model_path, seed=seed, epsilon=0.0, rule_service=rule_service)
             bot1 = _make_bot(opponent_spec, seed=seed + 1, model_path=args.model_path)
             final_state = run_logged_game(
                 initial_state=state,

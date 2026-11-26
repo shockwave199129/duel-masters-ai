@@ -7,7 +7,7 @@ from typing import Optional
 from core.cards import CardDefinition
 from core.enums import MAX_SHIELDS
 from core.state import GameState
-from core.zones import ShieldCard, HandCard
+from core.zones import ShieldCard
 from core.zones.cards import _new_uid
 
 

@@ -42,7 +42,7 @@ load_env_file "${BASE_DIR}/crawler/.env"
 
 GENERATIONS=1   # how many generations to train
 PROMOTION_THRESHOLD="0.52"
-# PPO stays opt-in until self-play move sampling matches what PPO assumes
+# PPO learns only from finished games, so it stays opt-in
 TRAIN_MODE="${TRAIN_MODE:-action_score}"
 SELF_PLAY_PRESET="${SELF_PLAY_PRESET:-quick}"
 SELF_PLAY_WORKERS="${SELF_PLAY_WORKERS:-1}"
@@ -50,6 +50,8 @@ SELF_PLAY_GAMES="${SELF_PLAY_GAMES:-}"
 EVAL_GAMES="${EVAL_GAMES:-10}"
 EVAL_OPPONENTS="${EVAL_OPPONENTS:-heuristic}"
 CLEAN_START="${CLEAN_START:-0}"
+# Training device only (auto|cuda|cpu); self-play and evaluation stay on the CPU
+TRAIN_DEVICE="${TRAIN_DEVICE:-auto}"
 
 GEN=0
 PREV_MODEL="${INIT_MODEL:-}"   # empty → use the built-in gen-0 bot
@@ -104,6 +106,7 @@ while (( GEN < GENERATIONS )); do
             INIT_ARGS=(--init-checkpoint "${PREV_MODEL}")
         fi
         python dm_engine/scripts/train_ppo.py ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} \
+            --device "${TRAIN_DEVICE}" \
             --input "${SELF_PLAY_OUTPUT}" \
             --output "${TRAIN_OUTPUT}" \
             --epochs 4 \
@@ -116,6 +119,7 @@ while (( GEN < GENERATIONS )); do
     elif [[ "${TRAIN_MODE}" == "actor_critic" ]]; then
         TRAIN_OUTPUT="${MODEL_DIR}/gen${NEXT_GEN}_v3_action_critic.pt"
         python dm_engine/scripts/train_actor_critic.py \
+            --device "${TRAIN_DEVICE}" \
             --input "${SELF_PLAY_OUTPUT}" \
             --output "${TRAIN_OUTPUT}" \
             --epochs 10 \
@@ -128,6 +132,7 @@ while (( GEN < GENERATIONS )); do
     else
         TRAIN_OUTPUT="${MODEL_DIR}/gen${NEXT_GEN}_v3_action_score.pt"
         python dm_engine/scripts/train_action_score.py \
+            --device "${TRAIN_DEVICE}" \
             --input "${SELF_PLAY_OUTPUT}" \
             --output "${TRAIN_OUTPUT}" \
             --epochs 20 \

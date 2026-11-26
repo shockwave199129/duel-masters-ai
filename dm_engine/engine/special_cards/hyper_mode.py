@@ -1,8 +1,7 @@
 """engine/special_cards/hyper_mode.py — Hyper Mode card mechanics."""
 from __future__ import annotations
 from core.state import GameState
-from core.zones import Creature, EvolutionStackEntry, HandCard
-from core.cards import CardDefinition
+from core.zones import Creature, HandCard
 from core.cards import is_hyper_mode
 
 

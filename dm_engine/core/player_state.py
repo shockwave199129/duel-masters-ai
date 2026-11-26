@@ -278,6 +278,9 @@ class PlayerState:
             remaining[card.id] = max(0, remaining.get(card.id, 0) - 1)
         for card in self.battle_zone:
             remaining[card.id] = max(0, remaining.get(card.id, 0) - 1)
+            for entry in card.evolution_stack:
+                under_id = entry.definition.id
+                remaining[under_id] = max(0, remaining.get(under_id, 0) - 1)
         for card in self.graveyard:
             remaining[card.id] = max(0, remaining.get(card.id, 0) - 1)
         if include_hidden_shields:

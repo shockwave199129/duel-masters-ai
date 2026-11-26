@@ -8,7 +8,7 @@ from math import prod
 from core.enums import CardType, Civilization, Keyword, Phase
 from core.observation import Observation
 from core.state import GameState
-from rules import RuleKnowledgeService, phase_key_for_engine_phase
+from rules import RuleKnowledgeService
 
 
 OBSERVATION_VECTOR_SIZE = 14
@@ -192,7 +192,8 @@ def _draw_probability(remaining_count: int, deck_size: int, draws: int) -> float
 def _deck_memory_features(state: GameState, perspective: int) -> list[float]:
     player = state.players[perspective]
     remaining = player.cards_remaining_in_deck_by_id(include_hidden_shields=False)
-    deck_size = max(player.deck_size, 0)
+    # The unseen pool: remaining cards include the face-down shields
+    deck_size = max(player.deck_size + player.shield_count, 0)
     definitions = {
         card.id: _card_definition(card)
         for zone in (player.hand, player.mana_zone, player.battle_zone, player.graveyard)
@@ -356,7 +357,7 @@ def _public_trigger_density(state: GameState, perspective: int) -> list[float]:
     )
     return [
         _norm(trigger_count, 16),
-        _draw_probability(trigger_count, max(me.deck_size, 0), 1),
+        _draw_probability(trigger_count, max(me.deck_size + me.shield_count, 0), 1),
         float(opp_public_triggers) / float(opp_public_total),
     ]
 

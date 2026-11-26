@@ -7,6 +7,7 @@ from core.zones import Creature, HandCard, ManaCard, ShieldCard
 from engine.zone_mover import (
     _new_uid,
     move_battle_to_graveyard,
+    move_battle_to_zone,
     move_hand_to_graveyard,
 )
 
@@ -67,9 +68,14 @@ def _do_return_to_hand(state: GameState, controller: int, trigger: PendingTrigge
         if not found:
             return
         player_idx, creature = found
-        state.players[player_idx].battle_zone.remove(creature)
-        state.global_effects.remove_by_source(creature.uid)
-        _move_card_to_hand(state, player_idx, creature.definition, creature.uid)
+        move_battle_to_zone(
+            state,
+            player_idx,
+            creature.uid,
+            reason="returned",
+            to_zone="hand",
+            place=lambda definition, uid: _move_card_to_hand(state, player_idx, definition, uid),
+        )
         return
 
     if target_zone == "shield_zone":
@@ -164,18 +170,26 @@ def _do_destroy(state: GameState, controller: int, trigger: PendingTrigger) -> N
 
 
 def _do_banish_to_abyss(state: GameState, controller: int, trigger: PendingTrigger) -> None:
-    data = _trigger_data(trigger)
-    target_uid = data.get("target_uid")
-    for zone_name in ("battle_zone", "hand", "mana_zone", "shield_zone"):
-        zone = getattr(state.players[controller], zone_name)
-        for card in list(zone):
-            if getattr(card, "uid", None) != target_uid:
-                continue
-            zone.remove(card)
-            state.players[controller].abyss_zone.append(card.definition)
-            if zone_name == "battle_zone":
-                state.global_effects.remove_by_source(card.uid)
+    target_uid = _trigger_data(trigger).get("target_uid")
+    # The target may belong to either player; search the controller's cards first
+    for player_idx in (controller, 1 - controller):
+        p_state = state.players[player_idx]
+        if p_state.find_creature(target_uid) is not None:
+            move_battle_to_zone(
+                state,
+                player_idx,
+                target_uid,
+                reason="banished",
+                to_zone="abyss_zone",
+                place=lambda definition, _uid: p_state.abyss_zone.append(definition),
+            )
             return
+        for zone in (p_state.hand, p_state.mana_zone, p_state.shield_zone):
+            for card in zone:
+                if getattr(card, "uid", None) == target_uid:
+                    zone.remove(card)
+                    p_state.abyss_zone.append(card.definition)
+                    return
 
 
 

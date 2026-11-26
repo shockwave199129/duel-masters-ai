@@ -11,8 +11,7 @@ Implemented:
   - 703.4m: Weapon standalone → graveyard
 """
 
-from core.zones import Creature
-from core.enums import CardType, CardSubtype, Keyword
+from core.enums import CardType, Keyword
 from core.state import GameState
 
 

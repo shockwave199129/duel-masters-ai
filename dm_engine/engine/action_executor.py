@@ -8,6 +8,7 @@ from core.actions import Action, actions_equal
 from core.enums import ActionType, EffectType, Keyword, Phase
 from core.state import AttackContext, GameState, PendingTrigger
 from engine.trigger_resolver import resolve_pending_triggers
+from engine.effect_executor import resolve_choice
 from engine.action_generator import get_legal_actions
 from engine.battle_resolver import resolve_battle
 from engine.phase_controller import advance_phase
@@ -52,7 +53,33 @@ def _apply_twinpact_face(old_def, chars):
     )
 
 
+_CHOICE_ANSWERS = frozenset({
+    ActionType.PASS,
+    ActionType.SELECT_YES_NO,
+    ActionType.SELECT_TARGET,
+    ActionType.SELECT_CARD,
+    ActionType.SELECT_MANA,
+})
+
+
 def execute_action(state: GameState, action: Action, db=None, validate: bool = True) -> GameState:
+    """
+    Execute one legal action and return the new state.
+
+    Triggers queued by the action, including those from state-based actions,
+    resolve before this returns, unless an effect needs a player choice.
+    """
+    result = _apply_action(state, action, db=db, validate=validate)
+    if (
+        result.effect_stack.pending_triggers
+        and not result.effect_stack.is_waiting_for_choice()
+        and not result.is_terminal()
+    ):
+        result = resolve_pending_triggers(result)
+    return result
+
+
+def _apply_action(state: GameState, action: Action, db=None, validate: bool = True) -> GameState:
     """
     Apply one action and return a new GameState.
 
@@ -68,6 +95,11 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
 
     s = state.copy()
     action_type = action.action_type
+
+    # An awaited choice takes priority over the normal meaning of the action
+    choice = s.effect_stack.awaited_choice
+    if choice is not None and action.player == choice.player and action_type in _CHOICE_ANSWERS:
+        return resolve_choice(s, action)
 
     if action_type == ActionType.PASS:
         step = action.get_extra().get("step")

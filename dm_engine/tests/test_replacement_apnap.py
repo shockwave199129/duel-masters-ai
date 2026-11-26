@@ -4,10 +4,7 @@ import sys
 sys.path.insert(0, "dm_engine")
 
 from core.state import GameState, TurnInfo, PlayerState, EffectStack
-from core.enums import Phase, Zone
 from engine.replacement import ReplacementEffect, ReplacementEffectRegistry, EventType
-from core.cards import CardDefinition
-from core.zones import Creature
 
 
 FAILURES: list[str] = []

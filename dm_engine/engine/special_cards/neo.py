@@ -1,7 +1,6 @@
 """engine/special_cards/neo.py — Neo card mechanics."""
 from __future__ import annotations
-from core.state import GameState
-from core.zones import Creature, EvolutionStackEntry, HandCard
+from core.zones import Creature
 
 
 def should_apply_gneo_all_leave_replacement(creature: Creature) -> bool:

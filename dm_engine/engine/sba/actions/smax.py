@@ -1,8 +1,7 @@
 """engine/sba/actions/smax.py — State-based action: Rule 815 — S-MAX uniqueness."""
 from __future__ import annotations
-from core.enums import CardType, CardSubtype, GlobalEffectType
+from core.enums import CardSubtype
 from core.state import GameState
-from core.zones import Creature
 from core.zones import HandCard
 
 

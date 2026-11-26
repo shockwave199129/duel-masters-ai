@@ -32,6 +32,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Continue from this model, normally the one that generated the self-play data",
     )
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -56,6 +57,7 @@ def main() -> None:
     summary = train_ppo(
         input_path=args.input,
         output_path=args.output,
+        device=args.device,
         init_checkpoint=args.init_checkpoint,
         epochs=args.epochs,
         batch_size=args.batch_size,

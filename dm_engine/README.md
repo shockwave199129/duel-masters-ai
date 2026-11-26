@@ -449,11 +449,22 @@ python dm_engine/scripts/train_ppo.py \
 ```
 
 The training pipeline can switch modes with `TRAIN_MODE`. The default is
-`action_score`. PPO is opt-in for now: self-play does not yet sample moves the
-way PPO assumes, which weakens what it learns from bad moves. To continue from
-an existing model, set `INIT_MODEL` to its path; it generates the self-play data
-and, in `ppo` mode, is the starting point for training (`--init-checkpoint` when
-running `train_ppo.py` directly). PPO skips unfinished games.
+`action_score`. PPO learns only from finished games, so check how many games
+finish before relying on it. To continue from an existing model, set
+`INIT_MODEL` to its path; it generates the self-play data and, in `ppo` mode, is
+the starting point for training (`--init-checkpoint` when running
+`train_ppo.py` directly).
+
+Self-play samples moves from the model's softmax, mixed with `--epsilon` random
+moves, and records each move's true probability. Evaluation always plays the
+top-scoring move. Data recorded by earlier versions has different probabilities,
+so generate new data before training.
+
+Training uses the GPU when PyTorch can see one (`--device auto|cuda|cpu`, or
+`TRAIN_DEVICE` in the pipeline). Self-play and evaluation stay on the CPU, with
+2 threads per process unless `OMP_NUM_THREADS` is set. For RTX 50 series cards,
+see `requirements-gpu.txt`. Larger batches, such as `--batch-size 512`, make
+better use of the GPU.
 
 ```bash
 TRAIN_MODE=ppo bash dm_engine/scripts/run_training_pipeline.sh

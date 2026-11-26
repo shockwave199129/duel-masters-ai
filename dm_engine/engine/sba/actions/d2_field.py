@@ -1,8 +1,7 @@
 """engine/sba/actions/d2_field.py — State-based action: Rule 822 — D2 field."""
 from __future__ import annotations
-from core.enums import CardType, CardSubtype, GlobalEffectType
+from core.enums import CardType, CardSubtype
 from core.state import GameState
-from core.zones import Creature
 from core.zones import GraveyardCard
 
 

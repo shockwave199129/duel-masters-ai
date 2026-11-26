@@ -1119,34 +1119,63 @@ def find_missing_card_slugs(dsn: str, slugs: list[str]) -> list[str]:
     return [slug for slug in unique_slugs if slug not in found]
 
 
+COERCED_CONFIDENCE_CAP = 0.3
+_NEEDS_REVIEW_DDL = (
+    "ALTER TABLE card_effects ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT FALSE"
+)
+
+
+def _ensure_review_column(conn) -> None:
+    """Add the review flag to databases created before it existed."""
+    with conn.cursor() as cur:
+        cur.execute(_NEEDS_REVIEW_DDL)
+    conn.commit()
+
+
+def _coerce_effect_enums(card_id: int, effect: dict) -> bool:
+    """
+    Replace invalid enum values with safe defaults.
+
+    A coerced effect no longer means what the model said, so its confidence is
+    capped and it is flagged for review. Returns True if anything changed.
+    """
+    errors = _validate_effect_enums(effect)
+    if not errors:
+        return False
+    logger.warning(
+        "Card %d effect %d has enum validation errors, flagged for review: %s",
+        card_id, effect.get("ability_index", 0), "; ".join(errors)
+    )
+    # Safe defaults avoid DB constraint issues
+    if effect.get("effect_type") not in VALID_EFFECT_TYPES:
+        effect["effect_type"] = "triggered"
+    if effect.get("trigger_event") not in VALID_TRIGGER_EVENTS:
+        effect["trigger_event"] = "none"
+    if effect.get("effect_action") not in VALID_EFFECT_ACTIONS:
+        effect["effect_action"] = "none"
+    effect["active_in_zone"] = [
+        z if z in VALID_ZONES else "battle_zone"
+        for z in effect.get("active_in_zone", ["battle_zone"])
+    ]
+    effect["active_in_phase"] = [
+        p if p in VALID_PHASES else "any"
+        for p in effect.get("active_in_phase", ["any"])
+    ]
+    confidence = effect.get("parse_confidence")
+    effect["parse_confidence"] = min(
+        0.5 if confidence is None else float(confidence), COERCED_CONFIDENCE_CAP
+    )
+    effect["needs_review"] = True
+    return True
+
+
 def _save_effects(conn, card_id: int, effects: list[dict]):
     """Delete old effects for card and insert fresh parsed ones."""
     with conn.cursor() as cur:
         cur.execute("DELETE FROM card_effects WHERE card_id = %s", (card_id,))
 
         for eff in effects:
-            # Validate enum values before inserting
-            errors = _validate_effect_enums(eff)
-            if errors:
-                logger.warning(
-                    "Card %d effect %d has enum validation errors: %s",
-                    card_id, eff.get("ability_index", 0), "; ".join(errors)
-                )
-                # Fix invalid enums to safe defaults to avoid DB constraint issues
-                if eff.get("effect_type") not in VALID_EFFECT_TYPES:
-                    eff["effect_type"] = "triggered"
-                if eff.get("trigger_event") not in VALID_TRIGGER_EVENTS:
-                    eff["trigger_event"] = "none"
-                if eff.get("effect_action") not in VALID_EFFECT_ACTIONS:
-                    eff["effect_action"] = "none"
-                eff["active_in_zone"] = [
-                    z if z in VALID_ZONES else "battle_zone"
-                    for z in eff.get("active_in_zone", ["battle_zone"])
-                ]
-                eff["active_in_phase"] = [
-                    p if p in VALID_PHASES else "any"
-                    for p in eff.get("active_in_phase", ["any"])
-                ]
+            _coerce_effect_enums(card_id, eff)
 
             cur.execute(
                 """
@@ -1154,8 +1183,8 @@ def _save_effects(conn, card_id: int, effects: list[dict]):
                     card_id, face_index, face_name, ability_index, raw_text, effect_type, trigger_event,
                     trigger_condition, effect_action, effect_target, effect_value,
                     is_optional, is_replacement, active_in_phase, active_in_zone,
-                    parse_confidence
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    parse_confidence, needs_review
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     card_id,
@@ -1174,6 +1203,7 @@ def _save_effects(conn, card_id: int, effects: list[dict]):
                     eff.get("active_in_phase", ["any"]),
                     eff.get("active_in_zone", ["battle_zone"]),
                     eff.get("parse_confidence", 0.5),
+                    bool(eff.get("needs_review", False)),
                 ),
             )
     conn.commit()
@@ -1575,6 +1605,7 @@ def parse_pending_cards(
     effective_parallel = max(1, effective_parallel)
 
     conn = psycopg2.connect(dsn)
+    _ensure_review_column(conn)
 
     counts = {
         "parsed": 0,
@@ -1687,6 +1718,7 @@ def parse_cards_by_slugs(
     effective_parallel = max(1, effective_parallel)
 
     conn = psycopg2.connect(dsn)
+    _ensure_review_column(conn)
     counts = {
         "parsed": 0,
         "errors": 0,

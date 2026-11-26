@@ -20,7 +20,7 @@ import sys
 sys.path.insert(0, "dm_engine")
 
 from core.enums import (
-    ActionType, CardSubtype, CardType, Civilization, INFINITY, Keyword, Phase
+    CardSubtype, CardType, Civilization, INFINITY, Phase
 )
 from core.cards import CardDefinition
 from core.state import AttackContext, GameState, PlayerState, TurnInfo

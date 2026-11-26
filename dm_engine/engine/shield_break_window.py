@@ -9,10 +9,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from core.cards import CardDefinition
-from core.enums import Keyword
 from core.state import GameState, ShieldBreakWindow
-from core.zones import GraveyardCard, HandCard, ShieldCard
+from core.zones import GraveyardCard, ShieldCard
 from engine.zone_mover import move_standby_shield_to_hand
 
 

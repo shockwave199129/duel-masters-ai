@@ -15,18 +15,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.cards import CardDefinition
 from core.enums import (
-    CardType, CardSubtype, Civilization, Keyword, Phase,
+    CardType, CardSubtype, Civilization, Keyword,
 )
 from core.player_state import PlayerState
 from core.state import GameState, TurnInfo
-from core.zones import Creature, HandCard
+from core.zones import Creature
 from engine.sba.missing_sbas import (
     _sba_cannot_attack_tap,
     _sba_cross_gear_standalone,
     _sba_aura_fortress_standalone,
     _sba_weapon_standalone,
 )
-from engine.sba.checker import check_state_based_actions
 
 PASS = "✅"
 FAIL = "❌"

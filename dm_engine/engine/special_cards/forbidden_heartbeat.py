@@ -1,8 +1,6 @@
 """engine/special_cards/forbidden_heartbeat.py — Forbidden Heartbeat card mechanics."""
 from __future__ import annotations
-from core.state import GameState
-from core.zones import Creature, EvolutionStackEntry, HandCard
-from core.enums import CardSubtype
+from core.zones import Creature
 from core.cards import is_forbidden
 
 

@@ -3,7 +3,7 @@
 import sys
 sys.path.insert(0, "dm_engine")
 
-from core.enums import Civilization, ManaUsage
+from core.enums import Civilization
 from core.zones import ManaCard
 from unittest.mock import MagicMock
 from engine.action_generator import _get_mana_combinations

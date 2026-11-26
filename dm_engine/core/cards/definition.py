@@ -12,7 +12,7 @@ CardEffect      — one parsed ability row from card_effects table
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Optional, Any
+from typing import Optional
 from ..enums import Civilization, CardType, CardSubtype, Keyword, EffectType, TriggerEvent, EffectAction, CDAFormulaType
 
 
@@ -58,6 +58,10 @@ class CardEffect:
     # select_card, select_targets). Validated against Zone enum at load time.
 
     parse_confidence:  float         # 0.0–1.0, low = may need RAG fallback
+
+    def __deepcopy__(self, memo):
+        # Frozen card data never changes, so game-state copies share it
+        return self
 
     def is_keyword(self) -> bool:
         return self.effect_type == EffectType.KEYWORD
@@ -155,6 +159,10 @@ class CardDefinition:
     # WD Field (rule 819) — STUB: not yet implemented
     # Two field faces for WD Field double-sided cards; each face is a dict of properties
     wd_field_faces: tuple[dict, dict] = ()
+
+    def __deepcopy__(self, memo):
+        # Frozen card data never changes, so game-state copies share it
+        return self
 
     def is_creature(self) -> bool:
         return self.card_type == CardType.CREATURE

@@ -1,8 +1,7 @@
 """engine/sba/actions/invalid_type.py — State-based action: Rule 302.3/309.7/313.3 — invalid type."""
 from __future__ import annotations
-from core.enums import CardType, CardSubtype, GlobalEffectType
+from core.enums import CardType
 from core.state import GameState
-from core.zones import Creature
 from core.zones import GraveyardCard
 
 

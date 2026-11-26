@@ -15,6 +15,8 @@ def make_bot(
     rule_service=None,
     model_path: str | Path | None = None,
     device=None,
+    epsilon: float = 0.0,
+    sample: bool = False,
 ):
     """Construct a bot from a compact spec string."""
     normalized = spec.strip().lower()
@@ -24,11 +26,11 @@ def make_bot(
         return HeuristicBot(seed=seed)
     if normalized in {"neural", "current"}:
         from bot.neural_bot import NeuralBot
-        return NeuralBot(model_path=model_path, seed=seed, rule_service=rule_service, device=device)
+        return NeuralBot(model_path=model_path, seed=seed, rule_service=rule_service, device=device, epsilon=epsilon, sample=sample)
     if normalized.startswith("neural:"):
         from bot.neural_bot import NeuralBot
-        return NeuralBot(model_path=Path(spec.split(":", 1)[1]), seed=seed, rule_service=rule_service, device=device)
+        return NeuralBot(model_path=Path(spec.split(":", 1)[1]), seed=seed, rule_service=rule_service, device=device, epsilon=epsilon, sample=sample)
     if normalized.startswith("checkpoint:"):
         from bot.neural_bot import NeuralBot
-        return NeuralBot(model_path=Path(spec.split(":", 1)[1]), seed=seed, rule_service=rule_service, device=device)
+        return NeuralBot(model_path=Path(spec.split(":", 1)[1]), seed=seed, rule_service=rule_service, device=device, epsilon=epsilon, sample=sample)
     raise ValueError(f"Unsupported bot spec: {spec}")

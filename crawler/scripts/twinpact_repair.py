@@ -47,7 +47,7 @@ _CRAWLER_DIR = os.path.dirname(_SCRIPT_DIR)
 if _CRAWLER_DIR not in sys.path:
     sys.path.insert(0, _CRAWLER_DIR)
 
-from scripts.cf_cookies import apply_cf_cookies, fetch_html_with_browser  # noqa: E402
+from scripts.cf_cookies import apply_cf_cookies  # noqa: E402
 from scripts.scraper import save_card_to_db, parse_card_page  # noqa: E402
 
 logging.basicConfig(
@@ -56,10 +56,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DEFAULT_DSN = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:12345@localhost:5432/dm_database",
-)
+DEFAULT_DSN = os.getenv("DATABASE_URL")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DB queries
@@ -758,6 +755,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _build_parser().parse_args()
+    if not args.dsn:
+        sys.exit("DATABASE_URL is not set; pass --dsn or set it")
     conn = psycopg2.connect(args.dsn)
 
     if args.list_only:

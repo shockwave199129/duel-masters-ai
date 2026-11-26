@@ -1,8 +1,7 @@
 """engine/sba/actions/g_castle.py — State-based action: Rule 822 — G-Castle shield."""
 from __future__ import annotations
-from core.enums import CardType, CardSubtype, GlobalEffectType
+from core.enums import CardSubtype
 from core.state import GameState
-from core.zones import Creature
 from core.zones import GraveyardCard, ShieldCard
 from core.cards import is_g_castle
 

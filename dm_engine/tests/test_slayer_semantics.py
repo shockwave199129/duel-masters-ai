@@ -8,16 +8,12 @@ import sys
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from core.actions import pass_action, pass_block
 from core.cards import CardDefinition
-from core.enums import ActionType, CardSubtype, CardType, Civilization, GameResult, Keyword, Phase
+from core.enums import CardSubtype, CardType, Civilization, Keyword, Phase
 from core.player_state import PlayerState
 from core.state import AttackContext, GameState, TurnInfo
-from core.zones import Creature, HandCard, ShieldCard
-from engine.action_executor import execute_action
-from engine.action_generator import get_legal_actions
+from core.zones import Creature, ShieldCard
 from engine.battle_resolver import resolve_battle
-from engine.shield_resolver import resolve_shield_break_choice
 
 PASS = "✅"
 FAIL = "❌"

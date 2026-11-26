@@ -117,6 +117,7 @@ def main() -> None:
             chroma_path=str(args.chroma_path) if args.chroma_path is not None else None,
         )
     )
+    rule_service.preload()
     run_kwargs = dict(
         deck_json=args.deck_json,
         output_path=args.output,

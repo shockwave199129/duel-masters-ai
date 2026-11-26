@@ -1,7 +1,6 @@
 """engine/sba/actions/castle_graveyard.py — State-based action: Rule 304.3 — castle in graveyard."""
 from __future__ import annotations
 from core.state import GameState
-from core.zones import Creature
 from core.zones import GraveyardCard
 
 

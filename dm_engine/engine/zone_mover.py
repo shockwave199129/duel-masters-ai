@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from core.enums import ManaUsage, CardSubtype
+from core.enums import ManaUsage, CardSubtype, CardType
 from core.state import GameState
 from core.zones import Creature, EvolutionStackEntry, GraveyardCard, HandCard, ManaCard, ShieldCard, HyperspatialCard, _new_uid
 from core.cards import CardDefinition, is_twinpact, is_forbidden, get_other_face, is_hyper_mode, is_g_castle
@@ -170,7 +170,13 @@ def _fire_enter_battle_zone_trigger(state: GameState, creature, player: int) -> 
     fire_trigger(state, TriggerEvent.ON_SUMMON, trigger_data, creature.uid)
 
 
-def _fire_leave_battle_zone_triggers(state: GameState, creature, player: int, reason: str) -> None:
+def _fire_leave_battle_zone_triggers(
+    state: GameState,
+    creature,
+    player: int,
+    reason: str,
+    to_zone: str = "graveyard",
+) -> None:
     """Fire ON_DESTROY and ON_LEAVE_BATTLE_ZONE triggers for a creature leaving BZ."""
     from core.enums import TriggerEvent
     from engine.trigger_registry import fire_trigger
@@ -182,7 +188,7 @@ def _fire_leave_battle_zone_triggers(state: GameState, creature, player: int, re
         "zone": "battle_zone",
         "reason": reason,
         "from_zone": "battle_zone",
-        "to_zone": "graveyard" if reason != "returned_to_hyperspatial" else "hyperspatial_zone",
+        "to_zone": to_zone if reason != "returned_to_hyperspatial" else "hyperspatial_zone",
     }
     
     # Fire ON_DESTROY (for destruction)
@@ -191,6 +197,103 @@ def _fire_leave_battle_zone_triggers(state: GameState, creature, player: int, re
     
     # Fire ON_LEAVE_BATTLE_ZONE (always when leaving BZ)
     fire_trigger(state, TriggerEvent.ON_LEAVE_BATTLE_ZONE, trigger_data, creature.uid)
+
+
+_HYPERSPATIAL_SUBTYPES = (CardSubtype.PSYCHIC, CardSubtype.PSYCHIC_SUPER, CardSubtype.DRAGHEART)
+
+
+def release_attached_cards(
+    state: GameState,
+    player: int,
+    creature: Creature,
+    *,
+    reason: str,
+    place_under=None,
+) -> None:
+    """
+    Release every card that was under or attached to a creature that is leaving.
+
+    - Cards underneath follow the creature, because they are part of the same
+      element (rule 316.3). ``place_under(definition, uid)`` says where; the
+      default is the graveyard. Psychic and Dragheart cards return to the
+      Hyperspatial Zone instead (rules 805.4b, 807.4b).
+    - Cross Gear stays in the Battle Zone (rule 303.5).
+    - Other attached cards and seals go to the graveyard.
+    """
+    p_state = state.players[player]
+
+    def to_graveyard(definition, uid=None):
+        p_state.graveyard.insert(0, GraveyardCard(
+            definition=definition,
+            uid=uid or _new_uid(),
+            died_from=reason,
+            died_on_turn=state.turn_number,
+        ))
+
+    under, attached, seals = list(creature.evolution_stack), list(creature.attached_cards), list(creature.seals)
+    creature.evolution_stack.clear()
+    creature.attached_cards.clear()
+    creature.seals.clear()
+
+    for entry in under:
+        if entry.definition.card_subtype in _HYPERSPATIAL_SUBTYPES:
+            p_state.hyperspatial_zone.append(
+                HyperspatialCard(definition=entry.definition, face=0, uid=entry.uid)
+            )
+        else:
+            (place_under or to_graveyard)(entry.definition, entry.uid)
+    for definition in attached:
+        if definition.card_type == CardType.CROSS_GEAR:
+            # Static effects were registered when it was generated and never removed
+            p_state.battle_zone.append(Creature(
+                definition=definition,
+                controller=player,
+                owner=player,
+                entered_turn=state.turn_number,
+                has_summoning_sickness=False,
+            ))
+        else:
+            to_graveyard(definition)
+    for definition in seals:
+        to_graveyard(definition)
+
+
+def move_battle_to_zone(
+    state: GameState,
+    player: int,
+    creature_uid: str,
+    *,
+    reason: str,
+    to_zone: str,
+    place,
+) -> bool:
+    """
+    Move a battle-zone card somewhere other than the graveyard.
+
+    ``place(definition, uid)`` puts one card into the destination. Returns False
+    if a replacement effect kept the card where it was. Psychic and Dragheart
+    cards return to the Hyperspatial Zone instead of the destination.
+    """
+    creature = state.players[player].find_creature(creature_uid)
+    if creature is None:
+        raise ValueError(f"Battle-zone card {creature_uid} not found")
+    flip_forbidden(creature)
+
+    from engine.replacement import EventType
+    if state.replacement_effects.check_and_apply(
+        EventType.LEAVE_BATTLE_ZONE, state, target_uid=creature_uid, controller=player,
+    ) is not None:
+        return False
+
+    _fire_leave_battle_zone_triggers(state, creature, player, reason, to_zone)
+    if creature.definition.card_subtype in _HYPERSPATIAL_SUBTYPES:
+        move_battle_to_hyperspatial(state, player, creature_uid, reason=reason)
+        return True
+    creature.remove_static_effects(state)
+    state.players[player].battle_zone.remove(creature)
+    place(creature.definition, creature.uid)
+    release_attached_cards(state, player, creature, reason=reason, place_under=place)
+    return True
 
 
 def move_hand_to_graveyard(
@@ -250,6 +353,7 @@ def move_battle_to_hyperspatial(
 
     creature.remove_static_effects(state)
     state.players[player].battle_zone.remove(creature)
+    release_attached_cards(state, player, creature, reason=reason)
 
     # Reset in-play state before returning to hyperspatial
     creature.is_tapped = False
@@ -257,13 +361,11 @@ def move_battle_to_hyperspatial(
     creature.entered_turn = 0
     creature.face = 0
     creature.power_modifiers.clear()
-    creature.attached_cards.clear()
     creature.temp_flags.clear()
     creature.has_attacked_this_turn = False
     creature.is_blocking = False
     creature.blocking_uid = None
     creature.hyper_mode_released = False
-    creature.seals.clear()
     creature.linked_cells.clear()
     creature.is_psychic_cell = False
 
@@ -343,17 +445,10 @@ def move_battle_to_graveyard(
     if should_apply_gneo_all_leave_replacement(creature):
         # Move the entire evolution stack to graveyard
         creature.temp_flags["_replacement_already_applied"] = True
-        # Move underlying cards first (they leave as cards, not creatures)
-        for entry in creature.evolution_stack:
-            state.players[player].graveyard.insert(0, GraveyardCard(
-                definition=entry.definition,
-                uid=entry.uid if hasattr(entry, 'uid') else creature.uid,
-                died_from=f"{reason}_gneo_all_leave",
-                died_on_turn=state.turn_number,
-            ))
-        # Move the top card to graveyard
+        _fire_leave_battle_zone_triggers(state, creature, player, reason)
         creature.remove_static_effects(state)
         state.players[player].battle_zone.remove(creature)
+        release_attached_cards(state, player, creature, reason=f"{reason}_gneo_all_leave")
         graveyard_card = GraveyardCard(
             definition=creature.definition,
             uid=creature.uid,
@@ -408,6 +503,7 @@ def move_battle_to_graveyard(
         died_on_turn=state.turn_number,
     )
     state.players[player].graveyard.insert(0, graveyard_card)
+    release_attached_cards(state, player, creature, reason=reason)
     return graveyard_card
 
 
@@ -438,23 +534,14 @@ def move_evolution_whole_stack_to_graveyard(
 
     p_state = state.players[player]
 
-    # Move all underlying cards to graveyard (as cards, not creatures)
-    # Do this first so the top card is cleared
-    for under_entry in creature.get_all_under_cards():
-        graveyard_card = GraveyardCard(
-            definition=under_entry.definition,
-            uid=under_entry.uid,
-            died_from=reason,
-            died_on_turn=state.turn_number,
-        )
-        p_state.graveyard.insert(0, graveyard_card)
-
     # Fire leave triggers for the top card ONLY (per rule 109.2b)
     _fire_leave_battle_zone_triggers(state, creature, player, reason)
     
     # Now remove the creature from battle zone and move top card to graveyard
     creature.remove_static_effects(state)
     p_state.battle_zone.remove(creature)
+    # Underlying cards leave as cards, not creatures (rule 109.2b)
+    release_attached_cards(state, player, creature, reason=reason)
 
     # Top card goes to graveyard as a creature
     graveyard_card = GraveyardCard(

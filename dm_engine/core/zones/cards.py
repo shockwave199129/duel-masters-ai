@@ -19,12 +19,10 @@ Objects defined here:
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Optional
 from uuid import uuid4
 
-from ..enums import Civilization, Keyword, CardSubtype, CDAFormulaType, EffectAction, INFINITY
-from ..cards import CardDefinition, CardEffect
+from ..enums import Civilization
+from ..cards import CardDefinition
 
 
 def _new_uid() -> str:

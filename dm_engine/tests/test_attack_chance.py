@@ -8,7 +8,7 @@ from core.enums import Phase, Civilization, CardType, CardSubtype, Keyword
 from core.state import GameState, TurnInfo, PlayerState, AttackContext
 from core.zones import Creature, HandCard
 from core.cards import CardDefinition
-from core.actions import use_attack_chance, pass_action
+from core.actions import use_attack_chance
 from engine.action_executor import execute_action
 from engine.action_generator import get_legal_actions, _attack_chance_condition_met
 

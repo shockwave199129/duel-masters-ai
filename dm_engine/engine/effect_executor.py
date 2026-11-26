@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 import random
+from dataclasses import replace
 
 from core.cards import CardDefinition, CardEffect, is_hyper_mode
+from core.actions import Action
+from core.enums import ActionType
 from core.enums import EffectAction, CardSubtype, Civilization, ManaUsage
 from core.state import AwaitedChoice, GameState, PendingTrigger
 from core.zones import Creature, HandCard, ManaCard, ShieldCard, PowerModifier
@@ -54,29 +57,66 @@ def _effect_needs_choice(effect: CardEffect, trigger_data: dict) -> str | None:
       - effect_value with card selection → "select_card"
       - effect_value with mana re-selection → "select_mana"
     """
-    # Optional effects ask "do you want to use this?"
-    if effect.is_optional:
-        return "yes_no"
-
-    # Explicit requires_choice flag in effect_value
+    # Choices the player has already made for this trigger are not asked again
+    answered = trigger_data.get("answered", ())
     ev = effect.effect_value or {}
-    if ev.get("requires_choice") is True:
+
+    # Optional effects, or an explicit requires_choice flag, ask "use this?"
+    if (effect.is_optional or ev.get("requires_choice") is True) and "yes_no" not in answered:
         return "yes_no"
 
     # Target selection needed
     et = effect.effect_target or {}
-    if et.get("type") in ("creature", "shield", "card", "player"):
+    if et.get("type") in ("creature", "shield", "card", "player") and "select_target" not in answered:
         return "select_target"
 
     # Card selection needed (e.g. "choose a card from hand")
-    if "card_uid" in ev and ev.get("from_zone"):
+    if "card_uid" in ev and ev.get("from_zone") and "select_card" not in answered:
         return "select_card"
 
     # Mana re-selection needed
-    if "select_mana" in ev:
+    if "select_mana" in ev and "select_mana" not in answered:
         return "select_mana"
 
     return None
+
+
+def resolve_choice(state: GameState, action: Action) -> GameState:
+    """
+    Apply a player's answer to the awaited choice.
+
+    The paused effect either resumes with the answer in its trigger data, or is
+    dropped: the player declined it, or there was nothing valid to choose
+    (rule 101.3). Either way the choice is cleared, so the game moves on.
+    """
+    s = state.copy()
+    choice = s.effect_stack.awaited_choice
+    if choice is None:
+        return s
+    s.effect_stack.clear_choice()
+    s.currently_resolving_effect = False
+    s.record_action(action.action_type, action.player, action.card_id, action.target_uid)
+
+    trigger = choice.trigger
+    declined = action.action_type == ActionType.PASS or (
+        choice.choice_type == "yes_no" and not action.choice
+    )
+    if trigger is None or declined:
+        return check_state_based_actions(s)
+
+    data = dict(trigger.trigger_data)
+    data["answered"] = (*data.get("answered", ()), choice.choice_type)
+    selected = list(action.selected_uids or ())
+    if choice.choice_type == "select_target":
+        if action.target_uid:
+            data["target_uid"] = action.target_uid
+        else:
+            data["target_uids"] = selected
+    elif choice.choice_type == "select_card":
+        data["card_uid"] = action.card_uid or (selected[0] if selected else None)
+    elif choice.choice_type == "select_mana":
+        data["mana_used"] = action.mana_used
+    return execute_pending_trigger(s, replace(trigger, trigger_data=data))
 
 
 def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameState:
@@ -125,6 +165,7 @@ def execute_pending_trigger(state: GameState, trigger: PendingTrigger) -> GameSt
             valid_options=valid_options,
             min_choices=min_choices,
             prompt=effect.raw_text or f"Choose for {effect.effect_action.value}",
+            trigger=trigger,
         ))
         # Paused — do not execute or pop further triggers
         # Note: currently_resolving_effect is still True, preventing interruptions

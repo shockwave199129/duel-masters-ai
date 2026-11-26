@@ -5,7 +5,7 @@ sys.path.insert(0, "dm_engine")
 
 from core.enums import (
     EffectAction, GlobalEffectType, Civilization, CardType, CardSubtype,
-    INFINITY, Keyword, Phase
+    INFINITY, Phase
 )
 from core.global_effects import GlobalEffect, GlobalEffectRegistry
 from core.state import GameState, TurnInfo, PlayerState, EffectStack

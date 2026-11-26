@@ -11,7 +11,7 @@ sys.path.insert(0, dm_engine_path)
 sys.path.insert(0, os.path.join(project_root, "crawler"))
 
 from db.card_database import CardDatabase
-from core.enums import EffectAction, EffectType, TriggerEvent, Zone
+from core.enums import EffectAction
 
 
 def check(name: str, condition: bool, detail: str = "") -> bool:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from bot.neural_model import (
     save_model,
 )
 from bot.state_encoder import OBSERVATION_VECTOR_SIZE_V2, OBSERVATION_VECTOR_SIZE_V3
+from training.device import autocast, get_device, optimizer_step
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +213,28 @@ def collate_decisions(batch: list[tuple[torch.Tensor, ...]]) -> tuple[torch.Tens
     )
 
 
+def score_legal_actions(
+    score_fn,
+    states: torch.Tensor,
+    actions: torch.Tensor,
+    action_mask: torch.Tensor,
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Score only the real actions and return a [decisions, max_actions] tensor.
+
+    Padding slots are never run through the model, so memory grows with the
+    number of legal moves and not with batch size times the longest move list.
+    Padding scores are -1e9. Results are float32 for the loss arithmetic.
+    """
+    decision_index = action_mask.nonzero(as_tuple=True)[0]
+    merged = torch.cat([states[decision_index], actions[action_mask]], dim=-1)
+    with autocast(device):
+        flat = score_fn(merged)
+    scores = torch.full(action_mask.shape, -1e9, dtype=torch.float32, device=action_mask.device)
+    return scores.masked_scatter(action_mask, flat.float().reshape(-1))
+
+
 def _load_grouped_dataset(
     path: str | Path,
     *,
@@ -366,6 +390,7 @@ def train_action_score_model(
     loss_mode: str = "mse",
     ranking_margin: float = 0.10,
     balance_players: bool = True,
+    device: str = "auto",
 ) -> TrainSummary:
     """Train and save an ActionScoreNet checkpoint."""
     if epochs < 1:
@@ -377,6 +402,8 @@ def train_action_score_model(
         raise ValueError("loss_mode must be 'mse', 'pairwise', 'blended', or 'distillation'")
 
     torch.manual_seed(seed)
+    train_device = get_device(device)
+    pin = train_device.type == "cuda"
     loader_kwargs = {"balance_players": balance_players, "seed": seed}
     if loss_mode == "pairwise":
         dataset = _load_pairwise_dataset(input_path, **loader_kwargs)
@@ -387,10 +414,12 @@ def train_action_score_model(
     else:
         dataset = _load_jsonl_dataset(input_path, **loader_kwargs)
     if loss_mode == "distillation":
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_decisions)
+        loader = DataLoader(
+            dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_decisions, pin_memory=pin
+        )
         input_size = dataset.state_size + dataset.action_size
     else:
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=pin)
         input_size = int(dataset.tensors[0].shape[1])
     model = ActionScoreNet(
         input_size=input_size,
@@ -398,6 +427,9 @@ def train_action_score_model(
         num_blocks=num_blocks,
         dropout=dropout,
     )
+    model.to(train_device)
+    # A trainable temperature can satisfy ranking margins by rescaling scores
+    model.temperature.requires_grad_(False)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     bce_loss_fn = nn.BCEWithLogitsLoss()
     mse_loss_fn = nn.MSELoss()
@@ -406,39 +438,41 @@ def train_action_score_model(
 
     model.train()
     for epoch in range(epochs):
+        started = time.perf_counter()
         running_loss = 0.0
         batches = 0
         for batch in loader:
-            if loss_mode == "pairwise":
-                batch_chosen, batch_other, batch_labels = batch
-                chosen_scores = model(batch_chosen).squeeze(-1)
-                other_scores = model(batch_other).squeeze(-1)
-                loss = ranking_loss_fn(chosen_scores, other_scores, batch_labels)
-            elif loss_mode == "distillation":
-                batch_state, batch_actions, batch_policy, *_rest, action_mask = batch
-                batch_size, action_count, _ = batch_actions.shape
-                state_expanded = batch_state.unsqueeze(1).expand(-1, action_count, -1)
-                merged = torch.cat([state_expanded, batch_actions], dim=-1).reshape(batch_size * action_count, -1)
-                scores = model(merged).reshape(batch_size, action_count)
-                log_probs = torch.log_softmax(scores.masked_fill(~action_mask, -1e9), dim=-1)
-                loss = -(batch_policy * log_probs.masked_fill(~action_mask, 0.0)).sum(dim=-1).mean()
-            elif loss_mode == "blended":
-                batch_features, batch_targets = batch
-                predictions = model(batch_features).squeeze(-1)
-                loss = mse_loss_fn(torch.sigmoid(predictions), batch_targets)
-            else:
-                batch_features, batch_targets = batch
-                predictions = model(batch_features).squeeze(-1)
-                loss = bce_loss_fn(predictions, batch_targets)
+            batch = [tensor.to(train_device, non_blocking=True) for tensor in batch]
+            with autocast(train_device):
+                if loss_mode == "pairwise":
+                    batch_chosen, batch_other, batch_labels = batch
+                    chosen_scores = model(batch_chosen).float().squeeze(-1)
+                    other_scores = model(batch_other).float().squeeze(-1)
+                    loss = ranking_loss_fn(chosen_scores, other_scores, batch_labels)
+                elif loss_mode == "distillation":
+                    batch_state, batch_actions, batch_policy, *_rest, action_mask = batch
+                    scores = score_legal_actions(model, batch_state, batch_actions, action_mask, train_device)
+                    log_probs = torch.log_softmax(scores, dim=-1)
+                    loss = -(batch_policy * log_probs.masked_fill(~action_mask, 0.0)).sum(dim=-1).mean()
+                elif loss_mode == "blended":
+                    batch_features, batch_targets = batch
+                    predictions = model(batch_features).float().squeeze(-1)
+                    # Targets range from -1 to 1, so predictions must too
+                    loss = mse_loss_fn(torch.tanh(predictions), batch_targets)
+                else:
+                    batch_features, batch_targets = batch
+                    predictions = model(batch_features).float().squeeze(-1)
+                    loss = bce_loss_fn(predictions, batch_targets)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            optimizer_step(model, optimizer, loss)
 
             running_loss += float(loss.item())
             batches += 1
         final_loss = running_loss / max(batches, 1)
-        logger.info("epoch=%s/%s loss=%.6f", epoch + 1, epochs, final_loss)
+        logger.info(
+            "epoch=%s/%s loss=%.6f device=%s batch_size=%s seconds=%.1f",
+            epoch + 1, epochs, final_loss, train_device.type, batch_size, time.perf_counter() - started,
+        )
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -15,11 +15,11 @@ from core.cards import CardDefinition
 from core.enums import (
     CardSubtype, CardType, Civilization, GlobalEffectType, Phase,
 )
-from core.global_effects import GlobalEffect, GlobalEffectRegistry
+from core.global_effects import GlobalEffect
 from core.player_state import PlayerState
 from core.state import GameState, TurnInfo
 from core.zones import Creature
-from engine.layers import Layer, LayerEffectRegistry
+from engine.layers import Layer
 
 PASS = "✅"
 FAIL = "❌"

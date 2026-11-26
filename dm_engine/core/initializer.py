@@ -17,9 +17,9 @@ from __future__ import annotations
 import random
 from typing import Optional
 
-from .enums import Phase, CardSubtype
+from .enums import Phase
 from .cards import CardDefinition, DeckDefinition
-from .zones import HandCard, ShieldCard, Creature, HyperspatialCard, _new_uid
+from .zones import HandCard, ShieldCard, HyperspatialCard, _new_uid
 from .player_state import PlayerState
 from .state import GameState, TurnInfo
 from .global_effects import GlobalEffectRegistry

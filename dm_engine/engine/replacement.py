@@ -17,7 +17,7 @@ ordering is deferred to Phase 4; for now, first-registered-wins.
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from core.state import GameState

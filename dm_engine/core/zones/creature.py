@@ -708,7 +708,6 @@ class Creature:
         """
         from core.global_effects import GlobalEffect, GlobalEffectType
         from core.enums import Phase, TriggerEvent
-        from core.cards import CardEffect
 
         # Inline phase filtering to avoid circular import with engine.action_generator
         def _effect_active_in_phase(effect, phase: Phase) -> bool:
@@ -837,7 +836,7 @@ class Creature:
 
             elif action == EffectAction.NONE and card_effect.is_replacement_effect():
                 # Replacement effect — register with ReplacementEffectRegistry (rule 609)
-                from engine.replacement import ReplacementEffect, EventType
+                from engine.replacement import ReplacementEffect
 
                 # Determine which event type this replacement applies to
                 event_type = self._resolve_replacement_event_type(card_effect)

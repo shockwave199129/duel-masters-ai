@@ -7,9 +7,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from core.cards import CardDefinition, CardEffect
 from core.enums import (
     CardSubtype, CardType, Civilization, EffectAction,
-    EffectType, Keyword, Phase, TriggerEvent,
+    EffectType, Phase, TriggerEvent,
 )
-from core.global_effects import GlobalEffect, GlobalEffectType
 from core.player_state import PlayerState
 from core.state import GameState, TurnInfo
 from core.zones import Creature

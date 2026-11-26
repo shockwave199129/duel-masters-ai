@@ -8,21 +8,19 @@ Runs without a database connection using mock GameStates.
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from copy import deepcopy
 
 from core.enums import (
     Phase, ActionType, Civilization, Keyword,
-    CardType, CardSubtype, GlobalEffectType, ManaUsage,
+    CardType, CardSubtype, GlobalEffectType,
 )
-from core.cards import CardDefinition, DeckDefinition
+from core.cards import CardDefinition
 from core.zones import HandCard, ManaCard, ShieldCard, Creature
 from core.player_state import PlayerState
-from core.state import GameState, TurnInfo, EffectStack, AwaitedChoice
-from core.global_effects import GlobalEffect, GlobalEffectRegistry
-from core.initializer import initialize_game
+from core.state import GameState, TurnInfo, AwaitedChoice
+from core.global_effects import GlobalEffect
 from engine.action_generator import (
     get_legal_actions, _get_mana_combinations,
-    _get_valid_evolution_bases, can_play_card, can_attack,
+    can_play_card, can_attack,
 )
 
 PASS = "✅"

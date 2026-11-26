@@ -5,9 +5,7 @@ sys.path.insert(0, "dm_engine")
 
 from unittest.mock import MagicMock
 from engine.god_manager import GodManager
-from core.zones import Creature
 from core.cards import CardDefinition
-from core.enums import CardType, CardSubtype
 
 
 FAILURES: list[str] = []

@@ -66,8 +66,7 @@ from core.actions import (
     use_g_zero, use_g_strike, use_attack_chance, use_over_drive, use_sabaki_z,
     hyperize,
     select_yes_no, select_target, select_targets,
-    select_card, select_mana, select_evolution_base,
-    pass_action,
+    select_card, select_mana, pass_action,
 )
 
 # We lazily import CardDatabase to avoid circular imports

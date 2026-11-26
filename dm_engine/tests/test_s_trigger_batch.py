@@ -8,7 +8,6 @@ from core.enums import Phase, Civilization, CardType, CardSubtype, Keyword, Acti
 from core.state import GameState, TurnInfo, PlayerState, AttackContext
 from core.zones import Creature, ShieldCard
 from core.cards import CardDefinition
-from core.actions import use_shield_trigger, pass_action
 from engine.action_executor import execute_action
 from engine.action_generator import get_legal_actions
 from engine.shield_resolver import resolve_shield_break_choice

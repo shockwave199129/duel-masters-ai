@@ -44,15 +44,14 @@ GLOBAL STATE:
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from .enums import Civilization, Phase
 from .cards import CardDefinition
-from .zones import ManaCard, Creature, GraveyardCard
+from .zones import ManaCard, Creature
 from .player_state import PlayerState
 from .state import GameState, AttackContext
-from .global_effects import GlobalEffect
 
 
 # ── Observed Card ─────────────────────────────────────────────────────────────

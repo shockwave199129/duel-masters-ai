@@ -12,10 +12,10 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from core.cards import CardDefinition
-from core.enums import ActionType, CardSubtype, CardType, Civilization, Keyword, Phase
+from core.enums import CardSubtype, CardType, Civilization, Phase
 from core.player_state import PlayerState
 from core.state import AttackContext, GameState, TurnInfo
-from core.zones import Creature, HandCard, ShieldCard, ManaCard
+from core.zones import Creature, ShieldCard
 from engine.shield_resolver import resolve_shield_break_choice
 
 PASS = "✅"

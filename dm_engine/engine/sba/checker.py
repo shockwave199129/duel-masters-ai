@@ -22,10 +22,10 @@ SBAs implemented:
 from __future__ import annotations
 
 import logging
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from core.enums import GameResult, CardType, Keyword
-from core.zones import Creature, GraveyardCard
+from core.enums import GameResult, CardType
+from core.zones import Creature
 from engine.sba.missing_sbas import (
     _sba_cannot_attack_tap,
     _sba_aura_fortress_standalone,
@@ -67,6 +67,12 @@ def check_state_based_actions(state: GameState) -> GameState:
 
     if loop_count >= max_loops:
         logger.warning("SBA loop exceeded %d iterations; stopping.", max_loops)
+
+    # This round of events is over, so replacement effects can apply to the next
+    s.replacement_effects.reset_all()
+    for player in s.players:
+        for creature in player.battle_zone:
+            creature.temp_flags.pop("_replacement_already_applied", None)
 
     return s
 
@@ -150,8 +156,7 @@ def check_power_zero(state: GameState) -> bool:
             and c.compute_power(state) <= 0
         ]
         for creature in creatures_to_destroy:
-            _destroy_creature(state, player_idx, creature, "sba_power_zero")
-            fired = True
+            fired |= _destroy_creature(state, player_idx, creature, "destroyed")
     return fired
 
 
@@ -164,8 +169,7 @@ def check_battle_losers(state: GameState) -> bool:
             if c.temp_flags.get("lost_battle", False)
         ]
         for creature in creatures_to_destroy:
-            _destroy_creature(state, player_idx, creature, "sba_battle_loser")
-            fired = True
+            fired |= _destroy_creature(state, player_idx, creature, "battle")
     return fired
 
 
@@ -174,46 +178,47 @@ def _destroy_creature(
     player_idx: int,
     creature: Creature,
     reason: str,
-) -> None:
-    """Internal helper to destroy a creature and send to appropriate zone."""
-    from core.enums import CardSubtype
-    from engine.zone_mover import move_battle_to_hyperspatial
+) -> bool:
+    """
+    Remove a creature because of a state-based action.
+
+    reason "battle" or "destroyed" is destruction: it can be prevented and fires
+    destroy triggers. Any other reason only fires leave triggers. Returns True if
+    the state changed, so the SBA loop knows whether to run another pass.
+    """
+    from engine.zone_mover import move_battle_to_graveyard
 
     p = state.players[player_idx]
 
     if creature not in p.battle_zone:
-        return
+        return False
 
-    # Check replacement effects first (Rule 609)
-    from engine.replacement import EventType
-    replacement = state.replacement_effects.check_and_apply(
-        EventType.DESTROY,
-        state,
-        target_uid=creature.uid,
-        controller=player_idx,
-    )
-    if replacement is not None:
-        creature.temp_flags["_replacement_already_applied"] = True
-        return
+    def settle_battle_loss() -> bool:
+        # A prevented or replaced battle loss must not be applied again
+        return creature.temp_flags.pop("lost_battle", None) is not None
 
-    # Psychic/Dragheart creatures go to Hyperspatial (Rule 805.4b, 807.4b)
-    _HYPERSPATIAL_SUBTYPES = (CardSubtype.PSYCHIC, CardSubtype.PSYCHIC_SUPER, CardSubtype.DRAGHEART)
-    if creature.definition.card_subtype in _HYPERSPATIAL_SUBTYPES:
-        move_battle_to_hyperspatial(state, player_idx, creature.uid, reason=reason)
-        return
+    if reason in ("battle", "destroyed"):
+        if not creature.can_be_destroyed():
+            return settle_battle_loss()
 
-    # Normal creatures go to graveyard
-    p.battle_zone.remove(creature)
-    creature.remove_static_effects(state)
-    p.graveyard.insert(
-        0,
-        GraveyardCard(
-            definition=creature.definition,
-            uid=creature.uid,
-            died_from=reason,
-            died_on_turn=state.turn_number,
-        ),
-    )
+        # Check replacement effects first (Rule 609)
+        from engine.replacement import EventType
+        replacement = state.replacement_effects.check_and_apply(
+            EventType.DESTROY,
+            state,
+            target_uid=creature.uid,
+            controller=player_idx,
+        )
+        if replacement is not None:
+            creature.temp_flags["_replacement_already_applied"] = True
+            settle_battle_loss()
+            return True
+
+    # The one leave path: triggers, replacements, Hyperspatial and under-cards
+    move_battle_to_graveyard(state, player_idx, creature.uid, reason=reason)
+    if creature in p.battle_zone:
+        settle_battle_loss()
+    return True
 
 
 def check_evolution_reconstruction(state: GameState) -> bool:
@@ -235,7 +240,6 @@ def check_evolution_reconstruction(state: GameState) -> bool:
 
 def check_smax_uniqueness(state: GameState) -> bool:
     """Rule 703.4i: S-MAX Evolution creature → max 1 per player."""
-    from core.enums import CardSubtype
     from engine.special_cards.star_evolution import is_star_evolution
     
     fired = False
@@ -247,8 +251,8 @@ def check_smax_uniqueness(state: GameState) -> bool:
         # Keep only the first one; destroy others
         if len(smax_creatures) > 1:
             for creature in smax_creatures[1:]:
-                _destroy_creature(state, player_idx, creature, "sba_smax_uniqueness")
-                fired = True
+                # Put away by a state-based action, which is not destruction
+                fired |= _destroy_creature(state, player_idx, creature, "state_based")
     return fired
 
 

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from core.cards import CardEffect
+import logging
+
 from core.state import GameState, PendingTrigger
 from core.zones import Creature
 from engine.effect_executor import execute_pending_trigger
@@ -20,6 +21,10 @@ def queue_trigger(state: GameState, trigger: PendingTrigger) -> GameState:
     return s
 
 
+logger = logging.getLogger(__name__)
+MAX_TRIGGERS_PER_RESOLUTION = 100
+
+
 def resolve_pending_triggers(state: GameState) -> GameState:
     """
     Resolve pending triggers in queue order.
@@ -33,7 +38,22 @@ def resolve_pending_triggers(state: GameState) -> GameState:
     are left in the queue (standby) and not processed until the effect finishes.
     """
     s = state.copy()
-    while s.effect_stack.pending_triggers and not s.is_terminal():
+    resolved = 0
+    # Stop at a player choice: the paused effect must be answered first
+    while (
+        s.effect_stack.pending_triggers
+        and not s.effect_stack.is_waiting_for_choice()
+        and not s.is_terminal()
+    ):
+        if resolved >= MAX_TRIGGERS_PER_RESOLUTION:
+            logger.warning(
+                "Dropped %s trigger(s) after %s resolutions; effects are probably re-triggering each other",
+                len(s.effect_stack.pending_triggers),
+                resolved,
+            )
+            s.effect_stack.pending_triggers.clear()
+            break
+        resolved += 1
         trigger = s.effect_stack.pop_next_trigger()
         if trigger is None:
             break

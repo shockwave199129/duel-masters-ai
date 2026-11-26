@@ -14,7 +14,6 @@ from core.enums import CardType, Civilization, Phase
 from core.zones import Creature, HandCard, ManaCard, _new_uid
 from core.state import GameState, TurnInfo
 from core.player_state import PlayerState
-from core.actions import combine_king_creature, ManaUsage
 from core.enums import ActionType
 from engine.zone_mover import combine_king_cells, tap_mana_for_payment
 from engine.sba_checker import check_state_based_actions

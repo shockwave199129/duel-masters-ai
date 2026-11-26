@@ -4,7 +4,6 @@ from __future__ import annotations
 from core.state import GameState, PendingTrigger
 from core.zones import Creature
 from core.cards import CardDefinition, is_hyper_mode
-from core.enums import CardSubtype
 from engine.zone_mover import (
     flip_forbidden,
     move_hand_to_battle,

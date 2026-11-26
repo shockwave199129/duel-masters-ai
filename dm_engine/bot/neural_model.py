@@ -20,6 +20,11 @@ DEFAULT_HIDDEN_SIZE = 384
 DEFAULT_NUM_BLOCKS = 6
 DEFAULT_DROPOUT = 0.10
 MODEL_ARCHITECTURE = "ActionScoreNetV3"
+DEFAULT_VALUE_BLOCKS = 2
+_MODALITY_SIZES = {
+    MODEL_INPUT_SIZE_V2: (OBSERVATION_VECTOR_SIZE_V2, ACTION_VECTOR_SIZE_V2),
+    MODEL_INPUT_SIZE_V3: (OBSERVATION_VECTOR_SIZE_V3, ACTION_VECTOR_SIZE_V3),
+}
 
 
 class ModalityProjection(nn.Module):
@@ -75,13 +80,17 @@ class ActionScoreNet(nn.Module):
         if not 0.0 <= dropout < 1.0:
             raise ValueError("dropout must be in the range [0.0, 1.0)")
 
+        if input_size not in _MODALITY_SIZES:
+            raise ValueError(
+                f"input_size={input_size} matches no encoder version; expected one of {sorted(_MODALITY_SIZES)}"
+            )
+
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_blocks = num_blocks
         self.dropout = dropout
-        # Sizes of the raw modality vectors (V3 schema)
-        self.obs_size = OBSERVATION_VECTOR_SIZE_V3
-        self.act_size = ACTION_VECTOR_SIZE_V3
+        # Sizes of the raw state and action vectors for this encoder version
+        self.obs_size, self.act_size = _MODALITY_SIZES[input_size]
         # Modality‑specific projections to the hidden dimension
         self.state_proj = ModalityProjection(self.obs_size, hidden_size, dropout)
         self.action_proj = ModalityProjection(self.act_size, hidden_size, dropout)
@@ -130,6 +139,7 @@ class ActionCriticNet(ActionScoreNet):
         hidden_size: int = DEFAULT_HIDDEN_SIZE,
         num_blocks: int = DEFAULT_NUM_BLOCKS,
         dropout: float = DEFAULT_DROPOUT,
+        value_blocks: int = DEFAULT_VALUE_BLOCKS,
     ):
         super().__init__(
             input_size=input_size,
@@ -138,6 +148,10 @@ class ActionCriticNet(ActionScoreNet):
             dropout=dropout,
         )
         self.has_value_head = True
+        # 0 reproduces checkpoints saved before the value head had its own trunk
+        self.value_blocks = nn.Sequential(
+            *[ResidualMLPBlock(hidden_size, dropout=dropout) for _ in range(value_blocks)]
+        )
         self.value_proj = nn.Sequential(
             nn.LayerNorm(hidden_size),
             nn.Linear(hidden_size, hidden_size // 2),
@@ -168,6 +182,7 @@ class ActionCriticNet(ActionScoreNet):
 
     def forward_value(self, state_features: torch.Tensor) -> torch.Tensor:
         x = self.state_proj(state_features)
+        x = self.value_blocks(x)
         x = self.value_proj(x)
         value = self.value_head(x)
         return torch.tanh(value)
@@ -203,7 +218,7 @@ class LegacyActionScoreNet(nn.Module):
 def save_model(model: nn.Module, path: str | Path) -> None:
     """Save weights for later generations."""
     metadata = {
-        "state_dict": model.state_dict(),
+        "state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
         "schema_version": 3,
     }
     if isinstance(model, ActionScoreNet):
@@ -211,6 +226,8 @@ def save_model(model: nn.Module, path: str | Path) -> None:
         metadata.update(
             {
                 "input_size": model.input_size,
+                "obs_size": model.obs_size,
+                "act_size": model.act_size,
                 "hidden_size": model.hidden_size,
                 "num_blocks": model.num_blocks,
                 "dropout": model.dropout,
@@ -221,6 +238,7 @@ def save_model(model: nn.Module, path: str | Path) -> None:
         if isinstance(model, ActionCriticNet):
             metadata["model"] = "ActionCriticNetV1"
             metadata["has_value_head"] = True
+            metadata["value_blocks"] = len(model.value_blocks)
     elif isinstance(model, LegacyActionScoreNet):
         metadata.update(
             {
@@ -268,6 +286,7 @@ def load_model(
                 hidden_size=int(checkpoint.get("hidden_size", hidden_size)),
                 num_blocks=int(checkpoint.get("num_blocks", num_blocks)),
                 dropout=float(checkpoint.get("dropout", dropout)),
+                value_blocks=int(checkpoint.get("value_blocks", 0)),
             )
             model.load_state_dict(state_dict)
         else:
@@ -306,7 +325,7 @@ def load_actor_critic_init(path: str | Path) -> ActionCriticNet:
         dropout=base.dropout,
     )
     missing, unexpected = model.load_state_dict(base.state_dict(), strict=False)
-    shared_missing = [key for key in missing if not key.startswith(("value_proj.", "value_head."))]
+    shared_missing = [key for key in missing if not key.startswith(("value_blocks.", "value_proj.", "value_head."))]
     if shared_missing or unexpected:
         raise ValueError(f"{path} does not match: missing={shared_missing} unexpected={list(unexpected)}")
     return model

@@ -29,8 +29,6 @@ from core.cards import (
     is_zerom,
     is_zerom_creature,
     is_hyper_mode,
-    is_star_evolution,
-    is_dream_rare,
     is_duel_mate,
     is_g_castle,
     is_hyper_soul_x,
@@ -60,7 +58,6 @@ from engine.zone_mover import (
     move_shield_to_standby,
     move_standby_shield_to_hand,
     fortify_g_castle_to_shield,
-    fortify_shield_with_castle,
 )
 from engine.sba_checker import check_state_based_actions
 from engine.action_generator import _actions_for_hand_card
@@ -710,7 +707,6 @@ check("12b: face=1 returns other face keywords",
       chars_1["keywords"] == frozenset({Keyword.DOUBLE_BREAKER}))
 
 # 12c) Twinpact generates actions for both faces
-from core.actions import Action as _Action
 from engine.action_generator import _actions_for_hand_card
 mana_card = card(1210, "Mana-Water", civs=(Civilization.WATER,), cost=0)
 mana_card_2 = card(1211, "Mana-Water2", civs=(Civilization.WATER,), cost=0)

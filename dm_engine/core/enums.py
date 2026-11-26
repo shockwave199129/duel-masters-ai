@@ -5,7 +5,7 @@ Updated after full read of Duel Masters Comprehensive Game Rules Ver. 1.50.
 Rule references are cited inline (e.g. rule 501, rule 112.2a).
 """
 
-from enum import Enum, auto
+from enum import Enum
 
 
 # ── Civilizations ─────────────────────────────────────────────────────────────

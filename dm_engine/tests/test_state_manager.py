@@ -17,20 +17,17 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from copy import deepcopy
 
 from core.enums import (
     Civilization, CardType, CardSubtype, Phase, Keyword,
-    ActionType, GlobalEffectType, GameResult, Zone,
+    GlobalEffectType, GameResult, Zone,
 )
-from core.cards import CardDefinition, CardEffect, DeckDefinition
-from core.zones import HandCard, ManaCard, ShieldCard, Creature, GraveyardCard
-from core.player_state import PlayerState
-from core.state import GameState, TurnInfo, PendingTrigger, AwaitedChoice
-from core.global_effects import GlobalEffect, GlobalEffectRegistry
+from core.cards import CardDefinition, DeckDefinition
+from core.zones import HandCard, ManaCard, ShieldCard, Creature
+from core.state import AwaitedChoice
+from core.global_effects import GlobalEffect
 from core.observation import Observation
 from core.initializer import initialize_game
-from core.enums import EffectType, TriggerEvent, EffectAction
 
 PASS = "✅"
 FAIL = "❌"
@@ -583,7 +580,7 @@ check("Summoning sickness cleared EOT",
 print("\n── 11. Effect Stack ─────────────────────────────────────────")
 # ═══════════════════════════════════════════════════════════════════
 
-from core.state import EffectStack, AwaitedChoice, PendingTrigger
+from core.state import EffectStack, AwaitedChoice
 
 stack = EffectStack()
 check("Stack empty initially",         not stack.has_pending())

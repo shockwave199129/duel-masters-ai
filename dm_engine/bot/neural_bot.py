@@ -4,6 +4,7 @@ bot/neural_bot.py — generation-0 neural legal-action player.
 
 from __future__ import annotations
 
+import math
 import random
 from pathlib import Path
 
@@ -25,7 +26,9 @@ class NeuralBot:
         *,
         model: ActionScoreNet | None = None,
         model_path: str | Path | None = None,
-        epsilon: float = 0.05,
+        epsilon: float = 0.0,
+        sample: bool = False,
+        sample_temperature: float = 1.0,
         seed: int | None = None,
         encoder_version: int | None = None,
         rule_service=None,
@@ -48,7 +51,11 @@ class NeuralBot:
         self.model.to(resolved_device)
         self.model.eval()
         self.device = resolved_device
+        if sample_temperature <= 0:
+            raise ValueError("sample_temperature must be positive")
         self.epsilon = epsilon
+        self.sample = sample
+        self.sample_temperature = sample_temperature
         self.rng = random.Random(seed)
         self.rule_service = rule_service
         self.action_generator = RuleAwareActionGenerator(rule_service)
@@ -73,9 +80,6 @@ class NeuralBot:
     def choose_from_actions(self, state: GameState, actions: list[Action], db=None) -> Action:
         if not actions:
             raise ValueError("No legal actions available")
-        random_branch = self.epsilon > 0.0 and self.rng.random() < self.epsilon
-        random_action = self.rng.choice(actions) if random_branch else None
-
         perspective = actions[0].player
         if self.encoder_version == 2:
             state_features = encode_observation_v2(state, perspective)
@@ -98,28 +102,42 @@ class NeuralBot:
                 )
                 for action in actions
             ]
+        # Kept so the self-play recorder does not encode this position again
+        self.last_encoding = (
+            self.encoder_version,
+            state_features,
+            [row[len(state_features):] for row in rows],
+        )
         with torch.no_grad():
             inputs = torch.tensor(rows, dtype=torch.float32, device=self.device)
-            scores = self.model(inputs).squeeze(-1)
-            best_index = int(torch.argmax(scores).item())
+            scores = self.model(inputs).view(-1)
             policy_probs = torch.softmax(scores, dim=-1)
 
-        selected_action = random_action if random_branch and random_action is not None else actions[best_index]
-        selected_index = actions.index(selected_action)
-        greedy_action = actions[best_index]
-        if random_branch:
-            behavior_prob = self.epsilon / len(actions)
-        elif selected_action is greedy_action:
-            behavior_prob = (1.0 - self.epsilon) + (self.epsilon / len(actions))
+        # Move distribution: softmax when sampling (self-play), else the top score.
+        # epsilon mixes in uniform exploration.
+        count = len(actions)
+        if self.sample:
+            base = torch.softmax(scores.double() / self.sample_temperature, dim=-1).tolist()
         else:
-            behavior_prob = self.epsilon / len(actions)
+            best_index = int(torch.argmax(scores).item())
+            base = [1.0 if index == best_index else 0.0 for index in range(count)]
+
+        random_branch = self.epsilon > 0.0 and self.rng.random() < self.epsilon
+        if random_branch:
+            selected_index = self.rng.randrange(count)
+        elif self.sample:
+            selected_index = self.rng.choices(range(count), weights=base)[0]
+        else:
+            selected_index = best_index
+        # Probability of this move under the whole distribution, whichever branch drew it
+        behavior_prob = (1.0 - self.epsilon) * base[selected_index] + self.epsilon / count
 
         self.last_selected_index = selected_index
         self.last_was_random = random_branch
         self.last_policy_log_prob = float(torch.log(policy_probs[selected_index].clamp(min=1e-12)).item())
-        self.last_behavior_log_prob = float(torch.log(torch.tensor(max(behavior_prob, 1e-12))).item())
+        self.last_behavior_log_prob = math.log(max(behavior_prob, 1e-12))
         self.last_policy_probs = [float(prob) for prob in policy_probs.tolist()]
-        return selected_action
+        return actions[selected_index]
 
     def score_actions(self, state: GameState, actions: list[Action], db=None) -> list[float]:
         """Return model scores for diagnostics without changing action legality."""

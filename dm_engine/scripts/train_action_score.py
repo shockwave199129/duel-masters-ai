@@ -26,6 +26,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train ActionScoreNet from self-play JSONL")
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -53,6 +54,7 @@ def main() -> None:
     summary = train_action_score_model(
         input_path=args.input,
         output_path=args.output,
+        device=args.device,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,

@@ -1,0 +1,5 @@
+# NVIDIA RTX 50 series (sm_120) training. Needs a driver reporting CUDA 13.4 or newer.
+#   pip install -r requirements.txt
+#   pip install --force-reinstall --no-deps -r requirements-gpu.txt
+--index-url https://download.pytorch.org/whl/cu134
+torch==2.15.0+cu134
