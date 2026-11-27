@@ -297,12 +297,31 @@ def _remaining_mana_features(action: Action, state) -> list[float]:
     return features
 
 
+# Encoding a position asks the same payment question for many moves
+_PAYMENT_CACHE: dict = {}
+_PAYMENT_CACHE_LIMIT = 50_000
+
+
+def _payment_options(mana_cards, cost: int, civilizations) -> int:
+    """How many ways these mana cards can pay for a card (as the engine counts)."""
+    # Only the untapped cards' civilizations affect the number of ways to pay
+    key = (tuple(m.civilizations for m in mana_cards if not m.is_tapped), cost, civilizations)
+    count = _PAYMENT_CACHE.get(key)
+    if count is None:
+        from engine.action_generator import _get_mana_combinations
+
+        count = len(_get_mana_combinations(mana_cards, cost, civilizations))
+        if len(_PAYMENT_CACHE) >= _PAYMENT_CACHE_LIMIT:
+            _PAYMENT_CACHE.clear()
+        _PAYMENT_CACHE[key] = count
+    return count
+
+
 def _has_followup_play(action: Action, state, db) -> float:
     if state is None or db is None or state.current_phase != Phase.MAIN:
         return 0.0
     if not action.costs_mana() and not action.is_free_execution():
         return 0.0
-    from engine.action_generator import _get_mana_combinations
 
     player_state = state.players[action.player]
     used_uids = {usage.mana_uid for usage in action.mana_used}
@@ -311,7 +330,7 @@ def _has_followup_play(action: Action, state, db) -> float:
         if hand_card.uid == action.card_uid:
             continue
         definition = hand_card.definition
-        if _get_mana_combinations(remaining_mana, definition.cost, definition.civilizations):
+        if _payment_options(remaining_mana, definition.cost, definition.civilizations):
             return 1.0
     return 0.0
 
@@ -322,10 +341,8 @@ def _payment_combo_count(action: Action, state, db) -> float:
     card = _card_from_db(action.card_id, db)
     if card is None or not action.costs_mana():
         return 0.0
-    from engine.action_generator import _get_mana_combinations
-
-    combos = _get_mana_combinations(state.players[action.player].mana_zone, card.cost, card.civilizations)
-    return _norm(len(combos), 50)
+    mana_zone = state.players[action.player].mana_zone
+    return _norm(_payment_options(mana_zone, card.cost, card.civilizations), 50)
 
 
 def encode_action(action: Action) -> list[float]:

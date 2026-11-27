@@ -1,7 +1,6 @@
 """engine/cards/effect_actions/keywords.py — Keyword grant and utility effects."""
 from __future__ import annotations
 
-import random
 
 from engine.zone_mover import _new_uid
 from core.cards import CardDefinition
@@ -92,7 +91,8 @@ def _do_untap(state: GameState, controller: int, trigger: PendingTrigger) -> Non
 
 
 def _do_shuffle(state: GameState, controller: int) -> None:
-    random.shuffle(state.players[controller].deck)
+    deck = state.players[controller].deck
+    state.shared_chance("shuffle", controller, len(deck)).shuffle(deck)
 
 
 

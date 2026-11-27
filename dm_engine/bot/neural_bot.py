@@ -77,9 +77,10 @@ class NeuralBot:
         """Generate executable candidate actions using current rule context."""
         return self.action_generator.generate(state, db=db)
 
-    def choose_from_actions(self, state: GameState, actions: list[Action], db=None) -> Action:
-        if not actions:
-            raise ValueError("No legal actions available")
+    def encode_rows(
+        self, state: GameState, actions: list[Action], db=None,
+    ) -> tuple[list[float], list[list[float]]]:
+        """The position as the player moving sees it, and one model input per move."""
         perspective = actions[0].player
         if self.encoder_version == 2:
             state_features = encode_observation_v2(state, perspective)
@@ -102,6 +103,12 @@ class NeuralBot:
                 )
                 for action in actions
             ]
+        return state_features, rows
+
+    def choose_from_actions(self, state: GameState, actions: list[Action], db=None) -> Action:
+        if not actions:
+            raise ValueError("No legal actions available")
+        state_features, rows = self.encode_rows(state, actions, db=db)
         # Kept so the self-play recorder does not encode this position again
         self.last_encoding = (
             self.encoder_version,
@@ -143,16 +150,7 @@ class NeuralBot:
         """Return model scores for diagnostics without changing action legality."""
         if not actions:
             return []
-        perspective = actions[0].player
-        if self.encoder_version == 2:
-            state_features = encode_observation_v2(state, perspective)
-            rows = [state_features + encode_action_v2(action, state=state, db=db) for action in actions]
-        else:
-            state_features = encode_observation_v3(state, perspective, rule_service=self.rule_service)
-            rows = [
-                state_features + encode_action_v3(action, state=state, db=db, rule_service=self.rule_service)
-                for action in actions
-            ]
+        _, rows = self.encode_rows(state, actions, db=db)
         with torch.no_grad():
             inputs = torch.tensor(rows, dtype=torch.float32, device=self.device)
             return [float(score) for score in self.model(inputs).view(-1).tolist()]

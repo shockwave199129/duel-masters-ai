@@ -180,6 +180,23 @@ class ActionCriticNet(ActionScoreNet):
     def forward_policy(self, features: torch.Tensor) -> torch.Tensor:
         return self.forward(features)
 
+    def forward_policy_and_value(
+        self, state_features: torch.Tensor, action_features: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Move scores and the value of one position, for search. ``state_features``
+        has one row and ``action_features`` one row per move. The position is
+        projected once and used by both heads.
+        """
+        position = self.state_proj(state_features)
+        x = torch.cat(
+            [position.expand(action_features.shape[0], -1), self.action_proj(action_features)],
+            dim=-1)
+        x = self.blocks(self.input_projection(self.input_norm(x)))
+        scores = self.head(x) / self.temperature.clamp(min=0.1, max=10.0)
+        value = torch.tanh(self.value_head(self.value_proj(self.value_blocks(position))))
+        return scores.view(-1), value.view(-1)
+
     def forward_value(self, state_features: torch.Tensor) -> torch.Tensor:
         x = self.state_proj(state_features)
         x = self.value_blocks(x)

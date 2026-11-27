@@ -9,7 +9,6 @@ continues where it stopped once the player answers.
 from __future__ import annotations
 
 import copy
-import random
 from dataclasses import dataclass, replace
 
 from core.card_scripts import (
@@ -249,8 +248,7 @@ def _step_random_discard(ctx, params, answer):
     if params["count"] <= 0 or not hand:
         return
     # Seeded from the game position, so a replayed game discards the same cards
-    rng = random.Random(
-        f"{state.game_id}:{state.turn_number}:{ctx.trigger.source_uid}:{params['count']}")
+    rng = state.seeded_chance(ctx.trigger.source_uid, params["count"])
     _discard(state, ctx.opponent, hand[rng.randrange(len(hand))].uid, by_opponent=True)
     ctx.then(("random_discard", {"count": params["count"] - 1}))
 
@@ -731,7 +729,9 @@ def _step_reveal_creatures_to_hand(ctx, params, answer):
     left = min(params["left"], len(p_state.deck))
     if answer is not None and answer is not _NO_ANSWER:
         definition = p_state.deck.pop(int(answer.split(":")[1]))
-        p_state.hand.append(HandCard(definition=definition, uid=_new_uid()))
+        revealed = HandCard(definition=definition, uid=_new_uid())
+        p_state.hand.append(revealed)
+        ctx.state.public_uids.add(revealed.uid)  # both players saw it
         p_state.note_deck()
         ctx.then(("reveal_creatures_to_hand", {"left": left - 1}))
         return None
@@ -751,8 +751,7 @@ def _step_mystery_cube(ctx, params, answer):
     if not p_state.deck:
         return None
     if not params.get("shuffled"):
-        rng = random.Random(f"{ctx.state.game_id}:{ctx.state.turn_number}:{ctx.trigger.source_uid}")
-        rng.shuffle(p_state.deck)
+        ctx.state.seeded_chance(ctx.trigger.source_uid).shuffle(p_state.deck)
         ctx.queue[0] = ("mystery_cube", {"shuffled": True})
         params = ctx.queue[0][1]
     top = p_state.deck[0]
@@ -1032,8 +1031,7 @@ def _step_shuffle_from_graveyard(ctx, params, answer):
         if options:
             return Ask(ctx.me, options, prompt="Choose a card to return to your deck")
     cards = [c for c in p_state.graveyard if c.uid in chosen]
-    rng = random.Random(f"{ctx.state.game_id}:{ctx.state.turn_number}:{ctx.trigger.source_uid}")
-    rng.shuffle(cards)
+    ctx.state.seeded_chance(ctx.trigger.source_uid).shuffle(cards)
     for card in cards:
         p_state.graveyard.remove(card)
         p_state.deck.append(card.definition)

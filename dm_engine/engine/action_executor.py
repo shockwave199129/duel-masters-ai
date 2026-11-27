@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from core.zones import HandCard
 from core.actions import Action, actions_equal
-from core.card_scripts import COUNTERATTACK
+from core.card_scripts import COUNTERATTACK, OPPONENT_HAND_REVEALED
+from core.continuous_rules import controls
 from core.enums import ActionType, CardSubtype, EffectType, Keyword, Phase
 from core.state import AttackContext, GameState, PendingTrigger
 from engine.trigger_resolver import resolve_pending_triggers
@@ -95,7 +96,26 @@ def execute_action(state: GameState, action: Action, db=None, validate: bool = T
         result = resolve_pending_triggers(result)
     end_attack_if_removed(result)
     tap_new_mana(mana_before, result)
+    # Before and after, so a card that leaves a public zone is not missed
+    remember_public_cards(state, result)
+    remember_public_cards(result, result)
     return result
+
+
+def remember_public_cards(seen_in: GameState, state: GameState) -> None:
+    """Record in ``state`` every card that both players can see in ``seen_in``."""
+    public = state.public_uids
+    for player, p_state in enumerate(seen_in.players):
+        for creature in p_state.battle_zone:
+            public.add(creature.uid)
+            public.update(entry.uid for entry in creature.evolution_stack)
+        public.update(card.uid for card in p_state.mana_zone)
+        public.update(card.uid for card in p_state.graveyard)
+        public.update(card.uid for card in p_state.resolving)
+        public.update(shield.uid for shield in p_state.shield_zone if shield.is_face_up)
+        # A hand the opponent is being shown
+        if controls(seen_in, 1 - player, OPPONENT_HAND_REVEALED):
+            public.update(card.uid for card in p_state.hand)
 
 
 def end_attack_if_removed(state: GameState) -> None:

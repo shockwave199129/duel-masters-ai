@@ -1,7 +1,6 @@
 """engine/special_cards/shieldify.py — Shieldify effect (701.32, 113.1)."""
 from __future__ import annotations
 
-import random
 from typing import Optional
 
 from core.cards import CardDefinition
@@ -52,6 +51,7 @@ def add_shield_card(
 
 
 def _take_from_hand(
+    state: GameState,
     p_state,
     card_uid: str | None,
 ) -> tuple[CardDefinition, str] | None:
@@ -64,7 +64,8 @@ def _take_from_hand(
 
     if not p_state.hand:
         return None
-    hand_card = random.choice(p_state.hand)
+    chance = state.shared_chance("shieldify", p_state.player_index, len(p_state.hand))
+    hand_card = chance.choice(p_state.hand)
     p_state.hand.remove(hand_card)
     return hand_card.definition, hand_card.uid
 
@@ -119,7 +120,7 @@ def perform_shieldify(
             break
 
         if from_zone == "hand":
-            taken = _take_from_hand(p_state, uid)
+            taken = _take_from_hand(state, p_state, uid)
             if taken is None:
                 continue
             definition, hand_uid = taken

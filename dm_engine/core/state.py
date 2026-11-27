@@ -14,14 +14,15 @@ Also contains:
 """
 
 from __future__ import annotations
+import random
 from dataclasses import dataclass, field
-from copy import deepcopy
 from typing import Optional, Any
 
 from .enums import Phase, GameResult, Civilization, ActionType
 from .cards import CardDefinition, CardEffect
 from .zones import Creature, ShieldCard
 from .player_state import PlayerState
+from .state_copy import copy_state
 from .global_effects import GlobalEffectRegistry
 
 
@@ -376,6 +377,30 @@ class GameState:
     # ── Game ID (for logging) ─────────────────────────────────────────────────
     game_id:        str = ""
 
+    # ── What has been seen ────────────────────────────────────────────────────
+    # uids of cards both players have been shown. Such a card stays known if it
+    # goes back to a hand or to the shields with the same uid.
+    public_uids:    set = field(default_factory=set)
+
+    # ── Chance ────────────────────────────────────────────────────────────────
+    # Search sets this to give each imagined game its own random results.
+    # Empty in real games.
+    rng_salt:       str = ""
+
+    def seeded_chance(self, *parts) -> random.Random:
+        """Random source for a card effect, repeatable from the game position."""
+        key = ":".join(str(part) for part in (self.game_id, self.turn_number, *parts))
+        if self.rng_salt:
+            key = f"{key}:{self.rng_salt}"
+        return random.Random(key)
+
+    def shared_chance(self, *parts):
+        """
+        Python's shared generator in real games. An imagined game gets its own
+        source, so that searching does not change what happens in the real game.
+        """
+        return self.seeded_chance(*parts) if self.rng_salt else random
+
     # ─────────────────────────────────────────────────────────────────────────
     # Convenience accessors
     # ─────────────────────────────────────────────────────────────────────────
@@ -489,12 +514,9 @@ class GameState:
         Deep copy of the entire game state.
         Called before every action to preserve immutability.
 
-        Performance note: deepcopy is the safe default. If MCTS becomes
-        a bottleneck, optimize with __copy__ using selective shallow copies
-        for immutable objects (CardDefinition instances are shared by reference —
-        they never change so shallow copy is safe for them).
+        Card definitions never change, so copies share them.
         """
-        return deepcopy(self)
+        return copy_state(self)
 
     # ─────────────────────────────────────────────────────────────────────────
     # History management
