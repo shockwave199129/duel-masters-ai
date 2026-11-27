@@ -199,9 +199,12 @@ def _deck_memory_features(state: GameState, perspective: int) -> list[float]:
         for zone in (player.hand, player.mana_zone, player.battle_zone, player.graveyard)
         for card in zone
     }
+    # Look through the whole unseen pool. Searching the deck alone would drop a
+    # card whose copies are all in face-down shields, which reveals them.
+    unseen = [*player.deck, *(shield.definition for shield in player.shield_zone)]
     for card in player.deck_composition:
         if card not in definitions:
-            found = next((d for d in player.deck if d.id == card), None)
+            found = next((d for d in unseen if d.id == card), None)
             if found is not None:
                 definitions[card] = found
 

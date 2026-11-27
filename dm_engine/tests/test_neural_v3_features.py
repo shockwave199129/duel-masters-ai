@@ -14,7 +14,7 @@ from core.cards import CardDefinition
 from core.enums import ActionType, CardSubtype, CardType, Civilization, Keyword, Phase
 from core.player_state import PlayerState
 from core.state import GameState, TurnInfo
-from core.zones import HandCard, ManaCard, Creature
+from core.zones import HandCard, ManaCard, Creature, ShieldCard
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -76,6 +76,26 @@ features_a = encode_observation_v3(state_a, 0)
 features_b = encode_observation_v3(state_b, 0)
 check("Observation v3 vector size matches constant", len(features_a) == OBSERVATION_VECTOR_SIZE_V3)
 check("Opponent hidden hand contents do not change v3 features", features_a == features_b)
+
+
+
+def _state_with_own_unseen(in_deck, in_shields):
+    state = _state_with_opponent_hand(hidden_a)
+    me = state.players[0]
+    me.deck_composition = {1: 4, 7: 1, 8: 1}
+    me.deck = list(in_deck)
+    me.shield_zone = [ShieldCard(card) for card in in_shields]
+    return state
+
+
+# A single-copy card the player has not seen: they cannot know where it is
+single = _card(7, "Single Trigger", cost=2, keywords=[Keyword.SHIELD_TRIGGER, Keyword.BLOCKER])
+filler = _card(8, "Filler", cost=5)
+check(
+    "Which unseen cards are own shields does not change v3 features",
+    encode_observation_v3(_state_with_own_unseen([single], [filler]), 0)
+    == encode_observation_v3(_state_with_own_unseen([filler], [single]), 0),
+)
 
 action = pass_action(0, "attack")
 action_features = encode_action_v3(action, state=state_a, db=None)
